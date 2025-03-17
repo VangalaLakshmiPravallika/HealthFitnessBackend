@@ -10,6 +10,7 @@ from datetime import datetime
 import traceback
 import logging
 from datetime import datetime
+from datetime import datetime, timedelta
 
 from itsdangerous import URLSafeTimedSerializer
 
@@ -79,26 +80,63 @@ def update_steps():
     data = request.json
     user_email = get_jwt_identity()
     new_steps = data.get("steps")
+    current_date = datetime.utcnow().strftime("%Y-%m-%d")  # Store steps by date
 
     if new_steps is None:
         return jsonify({"error": "Steps value is required"}), 400
 
+    # Check if the last stored date is different (reset steps if new day)
+    last_entry = steps_collection.find_one({"email": user_email}, sort=[("date", -1)])
+    
+    if last_entry and last_entry["date"] != current_date:
+        # Reset steps to 0 for the new day
+        steps_collection.insert_one({
+            "email": user_email,
+            "date": current_date,
+            "steps": 0,
+            "last_updated": datetime.utcnow()
+        })
+
     steps_collection.update_one(
-        {"email": user_email},
-        {"$set": {"steps": new_steps}},
+        {"email": user_email, "date": current_date},
+        {"$set": {"steps": new_steps, "last_updated": datetime.utcnow()}},
         upsert=True
     )
 
-    return jsonify({"message": "Steps updated successfully!"}), 200
+    return jsonify({"message": "Steps updated successfully!", "date": current_date}), 200
 
 @app.route("/api/get-steps", methods=["GET"])
 @jwt_required()
 def get_steps():
     user_email = get_jwt_identity()
+    current_date = datetime.utcnow().strftime("%Y-%m-%d")  # Get today's date
 
-    user_steps = steps_collection.find_one({"email": user_email})
+    user_steps = steps_collection.find_one({"email": user_email, "date": current_date})
 
-    return jsonify({"steps": user_steps["steps"] if user_steps else 0})
+    return jsonify({"steps": user_steps["steps"] if user_steps else 0, "date": current_date})
+
+@app.route("/api/get-step-history", methods=["GET"])
+@jwt_required()
+def get_step_history():
+    user_email = get_jwt_identity()
+    today = datetime.utcnow()
+    start_of_week = today - timedelta(days=today.weekday())  # Monday of this week
+    start_of_month = today.replace(day=1)  # 1st day of this month
+
+    step_entries = list(
+        steps_collection.find(
+            {"email": user_email}, {"_id": 0, "date": 1, "steps": 1}
+        )
+    )
+
+    total_week = sum(entry["steps"] for entry in step_entries if entry["date"] >= start_of_week.strftime("%Y-%m-%d"))
+    total_month = sum(entry["steps"] for entry in step_entries if entry["date"] >= start_of_month.strftime("%Y-%m-%d"))
+
+    return jsonify({
+        "daily_steps": next((entry["steps"] for entry in step_entries if entry["date"] == today.strftime("%Y-%m-%d")), 0),
+        "weekly_steps": total_week,
+        "monthly_steps": total_month
+    })
 
 
 @app.route("/api/log-sleep", methods=["POST"])
