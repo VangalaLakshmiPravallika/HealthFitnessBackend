@@ -83,26 +83,28 @@ def update_steps():
     data = request.json
     user_email = get_jwt_identity()
     new_steps = data.get("steps")
-    current_date = get_current_date()
+    current_date = datetime.utcnow().strftime("%Y-%m-%d")  
 
     if new_steps is None:
         return jsonify({"error": "Steps value is required"}), 400
 
-    # ✅ Fetch the last entry (corrected sorting)
-    last_entry = steps_collection.find_one(
-        {"email": user_email}, sort=[("date", -1)]
-    )
+    # ✅ Ensure 'steps' collection exists in MongoDB
+    if "steps" not in db.list_collection_names():
+        db.create_collection("steps")  # Creates the collection if it doesn't exist
 
-    # ✅ If the date has changed, reset the steps
-    if not last_entry or last_entry["date"] != current_date:
+    # ✅ Find the last stored entry
+    last_entry = steps_collection.find_one({"email": user_email, "date": current_date})
+
+    # ✅ If new day, insert a new document instead of updating
+    if not last_entry:
         steps_collection.insert_one({
             "email": user_email,
             "date": current_date,
-            "steps": new_steps,  # Start new day with new steps
-            "last_updated": datetime.utcnow(),
+            "steps": new_steps,
+            "last_updated": datetime.utcnow()
         })
     else:
-        # ✅ Update today's steps
+        # ✅ Update existing record
         steps_collection.update_one(
             {"email": user_email, "date": current_date},
             {"$inc": {"steps": new_steps}, "$set": {"last_updated": datetime.utcnow()}},
@@ -110,6 +112,7 @@ def update_steps():
         )
 
     return jsonify({"message": "Steps updated successfully!", "date": current_date}), 200
+
 
 @app.route("/api/get-steps", methods=["GET"])
 @jwt_required()
