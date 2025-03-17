@@ -239,6 +239,36 @@ def join_group():
 
     return jsonify({"message":f"Already a member of {group_name}!"}),200
 
+@app.route("/api/leave-group", methods=["POST"])
+@jwt_required()
+def leave_group():
+    try:
+        data = request.json
+        user = get_jwt_identity()
+        group_name = data.get("group_name")
+
+        if not group_name:
+            return jsonify({"error": "Group name is required"}), 400
+
+        group = groups_collection.find_one({"name": group_name})
+
+        if not group:
+            return jsonify({"error": "Group not found"}), 404
+
+        if user not in group.get("members", []):
+            return jsonify({"error": "You are not a member of this group"}), 403
+
+        groups_collection.update_one(
+            {"name": group_name},
+            {"$pull": {"members": user}}
+        )
+
+        return jsonify({"message": f"Successfully left {group_name}"}), 200
+    
+    except Exception as e:
+        print(f"Error in /api/leave-group: {str(e)}")
+        return jsonify({"error": "Internal Server Error"}), 500
+
 
 @app.route("/api/group-post",methods=["POST"])
 @jwt_required()
