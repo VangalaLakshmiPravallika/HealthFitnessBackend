@@ -368,7 +368,38 @@ def get_user_groups():
 
     return jsonify({"groups": group_names})
 
+@app.route("/api/dislike-post", methods=["POST"])
+@jwt_required()
+def dislike_post():
+    data = request.json
+    group_name = data.get("group_name")
+    post_content = data.get("post_content")
 
+    result = groups_collection.update_one(
+        {"name": group_name, "posts.content": post_content},
+        {"$inc": {"posts.$.likes": -1}}
+    )
+
+    if result.modified_count > 0:
+        return jsonify({"message": "Post disliked successfully!"}), 200
+    return jsonify({"error": "Post not found"}), 404
+
+@app.route("/api/remove-comment", methods=["POST"])
+@jwt_required()
+def remove_comment():
+    data = request.json
+    group_name = data.get("group_name")
+    post_content = data.get("post_content")
+    comment_text = data.get("comment")
+
+    result = groups_collection.update_one(
+        {"name": group_name, "posts.content": post_content},
+        {"$pull": {"posts.$.comments": {"text": comment_text}}}
+    )
+
+    if result.modified_count > 0:
+        return jsonify({"message": "Comment removed successfully!"}), 200
+    return jsonify({"error": "Comment not found"}), 404
 
 logging.basicConfig(level=logging.DEBUG)
 
