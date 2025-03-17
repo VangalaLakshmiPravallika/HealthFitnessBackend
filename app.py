@@ -118,26 +118,38 @@ def get_steps():
 @app.route("/api/get-step-history", methods=["GET"])
 @jwt_required()
 def get_step_history():
-    user_email = get_jwt_identity()
-    today = datetime.utcnow()
-    start_of_week = today - timedelta(days=today.weekday())  # Monday of this week
-    start_of_month = today.replace(day=1)  # 1st day of this month
+    try:
+        user_email = get_jwt_identity()
+        today = datetime.utcnow().date()
 
-    step_entries = list(
-        steps_collection.find(
-            {"email": user_email}, {"_id": 0, "date": 1, "steps": 1}
-        )
-    )
+        # Fetch all steps for the user
+        step_records = list(steps_collection.find({"user": user_email}, {"_id": 0, "steps": 1, "date": 1}))
 
-    total_week = sum(entry["steps"] for entry in step_entries if entry["date"] >= start_of_week.strftime("%Y-%m-%d"))
-    total_month = sum(entry["steps"] for entry in step_entries if entry["date"] >= start_of_month.strftime("%Y-%m-%d"))
+        if not step_records:
+            return jsonify({"daily": 0, "weekly": 0, "monthly": 0}), 200
 
-    return jsonify({
-        "daily_steps": next((entry["steps"] for entry in step_entries if entry["date"] == today.strftime("%Y-%m-%d")), 0),
-        "weekly_steps": total_week,
-        "monthly_steps": total_month
-    })
+        daily_steps = 0
+        weekly_steps = 0
+        monthly_steps = 0
 
+        for record in step_records:
+            record_date = datetime.strptime(record["date"], "%Y-%m-%d").date()
+            if record_date == today:
+                daily_steps += record["steps"]
+            if today - record_date <= timedelta(days=7):
+                weekly_steps += record["steps"]
+            if today - record_date <= timedelta(days=30):
+                monthly_steps += record["steps"]
+
+        return jsonify({
+            "daily": daily_steps,
+            "weekly": weekly_steps,
+            "monthly": monthly_steps
+        }), 200
+
+    except Exception as e:
+        print(f"Error fetching step history: {str(e)}")
+        return jsonify({"error": "Failed to fetch step history"}), 500
 
 @app.route("/api/log-sleep", methods=["POST"])
 @jwt_required()
