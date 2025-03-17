@@ -122,7 +122,7 @@ def get_step_history():
         user_email = get_jwt_identity()
         today = datetime.utcnow().date()
 
-        # Fetch all steps for the user
+        # Fetch steps for the user
         step_records = list(steps_collection.find({"user": user_email}, {"_id": 0, "steps": 1, "date": 1}))
 
         if not step_records:
@@ -133,7 +133,15 @@ def get_step_history():
         monthly_steps = 0
 
         for record in step_records:
-            record_date = datetime.strptime(record["date"], "%Y-%m-%d").date()
+            if "date" not in record or "steps" not in record:
+                continue  # Ignore invalid records
+
+            try:
+                record_date = datetime.strptime(record["date"], "%Y-%m-%d").date()
+            except ValueError:
+                print(f"Invalid date format: {record['date']}")
+                continue
+
             if record_date == today:
                 daily_steps += record["steps"]
             if today - record_date <= timedelta(days=7):
@@ -148,8 +156,9 @@ def get_step_history():
         }), 200
 
     except Exception as e:
-        print(f"Error fetching step history: {str(e)}")
-        return jsonify({"error": "Failed to fetch step history"}), 500
+        print(f"⚠ Server error in /api/get-step-history: {str(e)}")
+        return jsonify({"error": "Internal server error"}), 500
+
 
 @app.route("/api/log-sleep", methods=["POST"])
 @jwt_required()
