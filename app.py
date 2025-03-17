@@ -29,6 +29,7 @@ groups_collection=db.groups
 meal_collection=db.meals
 badges_collection=db.badges
 progress_collection=db.progress
+steps_collection = db.steps
 
 app.config["JWT_SECRET_KEY"]=os.getenv("JWT_SECRET_KEY")
 jwt = JWTManager(app)
@@ -71,6 +72,34 @@ def login():
         return jsonify({"message":"Login successful","token":token}),200
 
     return jsonify({"error":"Invalid email or password"}),401
+
+@app.route("/api/update-steps", methods=["POST"])
+@jwt_required()
+def update_steps():
+    data = request.json
+    user_email = get_jwt_identity()
+    new_steps = data.get("steps")
+
+    if new_steps is None:
+        return jsonify({"error": "Steps value is required"}), 400
+
+    steps_collection.update_one(
+        {"email": user_email},
+        {"$set": {"steps": new_steps}},
+        upsert=True
+    )
+
+    return jsonify({"message": "Steps updated successfully!"}), 200
+
+@app.route("/api/get-steps", methods=["GET"])
+@jwt_required()
+def get_steps():
+    user_email = get_jwt_identity()
+
+    user_steps = steps_collection.find_one({"email": user_email})
+
+    return jsonify({"steps": user_steps["steps"] if user_steps else 0})
+
 
 @app.route("/api/log-sleep", methods=["POST"])
 @jwt_required()
