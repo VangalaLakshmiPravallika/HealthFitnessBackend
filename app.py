@@ -74,34 +74,40 @@ def login():
 
     return jsonify({"error":"Invalid email or password"}),401
 
+def get_current_date():
+    return datetime.utcnow().strftime("%Y-%m-%d")
+
 @app.route("/api/update-steps", methods=["POST"])
 @jwt_required()
 def update_steps():
     data = request.json
     user_email = get_jwt_identity()
     new_steps = data.get("steps")
-    current_date = datetime.utcnow().strftime("%Y-%m-%d")  # Store steps by date
+    current_date = get_current_date()
 
     if new_steps is None:
         return jsonify({"error": "Steps value is required"}), 400
 
-    # Check if the last stored date is different (reset steps if new day)
-    last_entry = steps_collection.find_one({"email": user_email}, sort=[("date", -1)])
-    
-    if last_entry and last_entry["date"] != current_date:
-        # Reset steps to 0 for the new day
+    # ✅ Fetch the last entry (corrected sorting)
+    last_entry = steps_collection.find_one(
+        {"email": user_email}, sort=[("date", -1)]
+    )
+
+    # ✅ If the date has changed, reset the steps
+    if not last_entry or last_entry["date"] != current_date:
         steps_collection.insert_one({
             "email": user_email,
             "date": current_date,
-            "steps": 0,
-            "last_updated": datetime.utcnow()
+            "steps": new_steps,  # Start new day with new steps
+            "last_updated": datetime.utcnow(),
         })
-
-    steps_collection.update_one(
-        {"email": user_email, "date": current_date},
-        {"$set": {"steps": new_steps, "last_updated": datetime.utcnow()}},
-        upsert=True
-    )
+    else:
+        # ✅ Update today's steps
+        steps_collection.update_one(
+            {"email": user_email, "date": current_date},
+            {"$inc": {"steps": new_steps}, "$set": {"last_updated": datetime.utcnow()}},
+            upsert=True
+        )
 
     return jsonify({"message": "Steps updated successfully!", "date": current_date}), 200
 
@@ -109,55 +115,55 @@ def update_steps():
 @jwt_required()
 def get_steps():
     user_email = get_jwt_identity()
-    current_date = datetime.utcnow().strftime("%Y-%m-%d")  # Get today's date
+    current_date = get_current_date()
 
-    user_steps = steps_collection.find_one({"email": user_email, "date": current_date})
+    today_steps = steps_collection.find_one(
+        {"email": user_email, "date": current_date}, {"_id": 0, "steps": 1}
+    )
 
-    return jsonify({"steps": user_steps["steps"] if user_steps else 0, "date": current_date})
+    return jsonify({"steps": today_steps["steps"] if today_steps else 0, "date": current_date})
+
+from flask import Flask, request, jsonify
+from flask_jwt_extended import jwt_required, get_jwt_identity
+from pymongo import MongoClient
+from datetime import datetime, timedelta
 
 @app.route("/api/get-step-history", methods=["GET"])
 @jwt_required()
 def get_step_history():
+    user_email = get_jwt_identity()
+    today = datetime.utcnow().date()
+
     try:
-        user_email = get_jwt_identity()
-        today = datetime.utcnow().date()
+        # Fetch today's steps
+        today_steps = steps_collection.find_one(
+            {"user": user_email, "date": str(today)}, {"_id": 0, "steps": 1}
+        )
 
-        # Fetch steps for the user
-        step_records = list(steps_collection.find({"user": user_email}, {"_id": 0, "steps": 1, "date": 1}))
+        # Fetch weekly steps (last 7 days)
+        week_start = today - timedelta(days=7)
+        weekly_steps = steps_collection.aggregate([
+            {"$match": {"user": user_email, "date": {"$gte": str(week_start), "$lte": str(today)}}},
+            {"$group": {"_id": None, "total": {"$sum": "$steps"}}}
+        ])
+        weekly_steps = next(weekly_steps, {}).get("total", 0)
 
-        if not step_records:
-            return jsonify({"daily": 0, "weekly": 0, "monthly": 0}), 200
-
-        daily_steps = 0
-        weekly_steps = 0
-        monthly_steps = 0
-
-        for record in step_records:
-            if "date" not in record or "steps" not in record:
-                continue  # Ignore invalid records
-
-            try:
-                record_date = datetime.strptime(record["date"], "%Y-%m-%d").date()
-            except ValueError:
-                print(f"Invalid date format: {record['date']}")
-                continue
-
-            if record_date == today:
-                daily_steps += record["steps"]
-            if today - record_date <= timedelta(days=7):
-                weekly_steps += record["steps"]
-            if today - record_date <= timedelta(days=30):
-                monthly_steps += record["steps"]
+        # Fetch monthly steps (last 30 days)
+        month_start = today - timedelta(days=30)
+        monthly_steps = steps_collection.aggregate([
+            {"$match": {"user": user_email, "date": {"$gte": str(month_start), "$lte": str(today)}}},
+            {"$group": {"_id": None, "total": {"$sum": "$steps"}}}
+        ])
+        monthly_steps = next(monthly_steps, {}).get("total", 0)
 
         return jsonify({
-            "daily": daily_steps,
+            "daily": today_steps["steps"] if today_steps else 0,
             "weekly": weekly_steps,
             "monthly": monthly_steps
         }), 200
 
     except Exception as e:
-        print(f"⚠ Server error in /api/get-step-history: {str(e)}")
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/log-sleep", methods=["POST"])
