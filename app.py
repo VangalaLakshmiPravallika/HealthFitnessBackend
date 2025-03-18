@@ -261,6 +261,15 @@ def like_achievement():
         return jsonify({"message":"Achievement liked!"}),200
     return jsonify({"error": "Achievement not found"}),404
 
+@app.route("/api/get-notifications", methods=["GET"])
+@jwt_required()
+def get_notifications():
+    user_email = get_jwt_identity()
+    notifications = list(db.notifications.find({"user": user_email}, {"_id": 0}))
+
+    return jsonify({"notifications": notifications}), 200
+
+
 @app.route("/api/join-group",methods=["POST"])
 @jwt_required()
 def join_group():
@@ -352,49 +361,66 @@ def like_post():
     group_name = data.get("group_name")
     post_content = data.get("post_content")
 
-    group = groups_collection.find_one(
-        {"name": group_name, "posts.content": post_content},
-        {"posts.$": 1}  
-    )
+    group = groups_collection.find_one({"name": group_name, "posts.content": post_content}, {"posts.$": 1})
 
     if not group or "posts" not in group or not group["posts"]:
         return jsonify({"error": "Post not found"}), 404
 
     post = group["posts"][0]
-    if "liked_by" in post and user_email in post["liked_by"]:
+    post_owner = post["user"]
+
+    if user_email in post.get("liked_by", []):
         return jsonify({"error": "You have already liked this post."}), 400
+
     result = groups_collection.update_one(
         {"name": group_name, "posts.content": post_content},
-        {
-            "$inc": {"posts.$.likes": 1},
-            "$push": {"posts.$.liked_by": user_email} 
-        }
+        {"$inc": {"posts.$.likes": 1}, "$push": {"posts.$.liked_by": user_email}}
     )
 
     if result.modified_count > 0:
+        # ✅ Store notification
+        db.notifications.insert_one({
+            "user": post_owner,
+            "message": f"{user_email} liked your post!",
+            "timestamp": datetime.utcnow().isoformat(),
+            "seen": False
+        })
         return jsonify({"message": "Post liked successfully!"}), 200
 
     return jsonify({"error": "Failed to like post"}), 500
-
-
 @app.route("/api/comment-post", methods=["POST"])
 @jwt_required()
 def comment_post():
     data = request.json
+    user_email = get_jwt_identity()
     group_name = data.get("group_name")
     post_content = data.get("post_content")
     comment_text = data.get("comment")
 
-    comment = {"user": get_jwt_identity(), "text": comment_text}
+    group = groups_collection.find_one({"name": group_name, "posts.content": post_content}, {"posts.$": 1})
+
+    if not group or "posts" not in group or not group["posts"]:
+        return jsonify({"error": "Post not found"}), 404
+
+    post = group["posts"][0]
+    post_owner = post["user"]
 
     result = groups_collection.update_one(
         {"name": group_name, "posts.content": post_content},
-        {"$push": {"posts.$.comments": comment}}
+        {"$push": {"posts.$.comments": {"user": user_email, "text": comment_text}}}
     )
 
     if result.modified_count > 0:
+        # ✅ Store notification
+        db.notifications.insert_one({
+            "user": post_owner,
+            "message": f"{user_email} commented on your post: {comment_text}",
+            "timestamp": datetime.utcnow().isoformat(),
+            "seen": False
+        })
         return jsonify({"message": "Comment added successfully!"}), 200
-    return jsonify({"error": "Post not found"}), 404
+
+    return jsonify({"error": "Failed to add comment"}), 500
 
 
 @app.route("/api/get-group-posts/<group_name>", methods=["GET"])
