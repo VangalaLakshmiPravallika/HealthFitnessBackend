@@ -265,9 +265,21 @@ def like_achievement():
 @jwt_required()
 def get_notifications():
     user_email = get_jwt_identity()
-    notifications = list(db.notifications.find({"user": user_email}, {"_id": 0}))
+
+    notifications = list(
+        db.notifications.find(
+            {"user": user_email}, 
+            {"_id": 0}  
+        ).sort("timestamp", -1) 
+    )
+
+    db.notifications.update_many(
+        {"user": user_email, "seen": False}, 
+        {"$set": {"seen": True}}
+    )
 
     return jsonify({"notifications": notifications}), 200
+
 
 
 @app.route("/api/join-group",methods=["POST"])
@@ -323,7 +335,7 @@ def leave_group():
         return jsonify({"error": "Internal Server Error"}), 500
 
 
-@app.route("/api/group-post",methods=["POST"])
+@app.route("/api/group-post", methods=["POST"])
 @jwt_required()
 def group_post():
     data = request.json
@@ -332,9 +344,9 @@ def group_post():
     content = data.get("content")
 
     if not group_name or not content:
-        return jsonify({"error":"Group name and content are required"}),400
+        return jsonify({"error": "Group name and content are required"}), 400
 
-    group = groups_collection.find_one({"name":group_name})
+    group = groups_collection.find_one({"name": group_name})
 
     if not group or user not in group.get("members", []):
         return jsonify({"error": "You are not a member of this group"}), 403
@@ -343,15 +355,15 @@ def group_post():
         "user": user,
         "content": content,
         "likes": 0,
-        "comments": []
+        "comments": [],
+        "timestamp": datetime.utcnow().isoformat(),
     }
 
-    result = groups_collection.update_one({"name": group_name}, {"$push":{"posts": post}})
+    result = groups_collection.update_one({"name": group_name}, {"$push": {"posts": post}})
 
     if result.modified_count > 0:
-        return jsonify({"message": "Post added successfully!"}), 201
+        return jsonify({"message": "Post added successfully!", "redirect": True}), 201
     return jsonify({"error": "Group not found"}), 404
-
 
 @app.route("/api/like-post", methods=["POST"])
 @jwt_required()
@@ -388,6 +400,7 @@ def like_post():
         return jsonify({"message": "Post liked successfully!"}), 200
 
     return jsonify({"error": "Failed to like post"}), 500
+
 @app.route("/api/comment-post", methods=["POST"])
 @jwt_required()
 def comment_post():
@@ -421,6 +434,7 @@ def comment_post():
         return jsonify({"message": "Comment added successfully!"}), 200
 
     return jsonify({"error": "Failed to add comment"}), 500
+
 
 
 @app.route("/api/get-group-posts/<group_name>", methods=["GET"])
