@@ -304,17 +304,33 @@ def group_post():
 @jwt_required()
 def like_post():
     data = request.json
+    user_email = get_jwt_identity()
     group_name = data.get("group_name")
     post_content = data.get("post_content")
 
+    group = groups_collection.find_one(
+        {"name": group_name, "posts.content": post_content},
+        {"posts.$": 1}  
+    )
+
+    if not group or "posts" not in group or not group["posts"]:
+        return jsonify({"error": "Post not found"}), 404
+
+    post = group["posts"][0]
+    if "liked_by" in post and user_email in post["liked_by"]:
+        return jsonify({"error": "You have already liked this post."}), 400
     result = groups_collection.update_one(
         {"name": group_name, "posts.content": post_content},
-        {"$inc": {"posts.$.likes": 1}}
+        {
+            "$inc": {"posts.$.likes": 1},
+            "$push": {"posts.$.liked_by": user_email} 
+        }
     )
 
     if result.modified_count > 0:
         return jsonify({"message": "Post liked successfully!"}), 200
-    return jsonify({"error": "Post not found"}), 404
+
+    return jsonify({"error": "Failed to like post"}), 500
 
 
 @app.route("/api/comment-post", methods=["POST"])
