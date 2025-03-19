@@ -22,7 +22,6 @@ CORS(app)
 MONGO_URI=os.getenv("MONGO_URI")
 client=MongoClient(MONGO_URI)
 db = client.HealthFitnessApp
-#db=client.FitFolk
 users_collection=db.users
 sleep_collection=db.sleep
 achievements_collection=db.achievements
@@ -41,14 +40,13 @@ jwt = JWTManager(app)
 def home():
     return jsonify({"message": "Flask API is running!"})
 
-# ✅ Function to calculate BMI
 def calculate_bmi(weight, height_cm):
-    height_m = height_cm / 100  # Convert height to meters
+    height_m = height_cm / 100  
     if height_m == 0:
         return None
     return round(weight / (height_m ** 2), 2)
 
-# ✅ API to store user profile (Onboarding completion)
+
 @app.route("/api/store-profile", methods=["POST"])
 @jwt_required()
 def store_profile():
@@ -64,7 +62,6 @@ def store_profile():
     if not all([name, age, gender, height, weight]):
         return jsonify({"error": "Missing required fields"}), 400
     
-    # Convert to appropriate types
     try:
         age = int(age)
         height = float(height)
@@ -89,7 +86,6 @@ def store_profile():
 
     return jsonify({"message": "Profile stored successfully", "bmi": bmi}), 201
 
-# ✅ API to get user profile
 @app.route("/api/get-profile", methods=["GET"])
 @jwt_required()
 def get_profile():
@@ -101,7 +97,6 @@ def get_profile():
     
     return jsonify(profile), 200
 
-# ✅ API to calculate and return BMI
 @app.route("/api/get-bmi", methods=["POST"])
 @jwt_required()
 def get_bmi():
@@ -120,10 +115,6 @@ def get_bmi():
 
     bmi = calculate_bmi(weight, height)
     return jsonify({"bmi": bmi}), 200
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
-
 
 
 @app.route("/api/register",methods=["POST"])
