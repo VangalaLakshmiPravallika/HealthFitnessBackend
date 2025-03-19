@@ -283,37 +283,6 @@ def get_achievements():
     achievements=list(achievements_collection.find({"user": user_email},{"_id":0}))
     return jsonify(achievements)
 
-@app.route("/api/store-profile", methods=["POST"])
-@jwt_required()
-def store_profile():
-    user_email = get_jwt_identity()
-    data = request.json
-    
-    name = data.get("name")
-    age = data.get("age")
-    weight = data.get("weight")
-    height = data.get("height")
-    medications = data.get("medications", "None")
-    
-    if not all([name, age, weight, height]):
-        return jsonify({"error": "Missing required fields"}), 400
-    
-    bmi = round(weight / ((height / 100) ** 2), 2)
-    
-    profile_data = {
-        "email": user_email,
-        "name": name,
-        "age": age,
-        "weight": weight,
-        "height": height,
-        "bmi": bmi,
-        "medications": medications
-    }
-    
-    profiles_collection.update_one({"email": user_email}, {"$set": profile_data}, upsert=True)
-    
-    return jsonify({"message": "Profile stored successfully", "bmi": bmi}), 201
-
 @app.route("/api/get-profile", methods=["GET"])
 @jwt_required()
 def get_profile():
