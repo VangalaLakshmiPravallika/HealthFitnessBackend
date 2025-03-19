@@ -288,16 +288,6 @@ def get_achievements():
     achievements=list(achievements_collection.find({"user": user_email},{"_id":0}))
     return jsonify(achievements)
 
-@app.route("/api/get-profile", methods=["GET"])
-@jwt_required()
-def get_profile():
-    user_email = get_jwt_identity()
-    profile = profiles_collection.find_one({"email": user_email}, {"_id": 0})
-    
-    if not profile:
-        return jsonify({"error": "Profile not found"}), 404
-    
-    return jsonify(profile), 200
 
 @app.route("/api/like-achievement",methods=["POST"])
 @jwt_required()
