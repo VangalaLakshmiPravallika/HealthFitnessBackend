@@ -239,6 +239,38 @@ def get_step_history():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/sleep-streak", methods=["GET"])
+@jwt_required()
+def get_sleep_streak():
+    user_email = get_jwt_identity()
+    
+    try:
+        sleep_data = list(sleep_collection.find(
+            {"user": user_email},
+            {"_id": 0, "date": 1}
+        ).sort("date", -1))
+
+        streak = 0
+        previous_date = None
+
+        for entry in sleep_data:
+            current_date = datetime.strptime(entry["date"], "%Y-%m-%d").date()
+            
+            if previous_date is None:
+                streak += 1
+            else:
+                if (previous_date - current_date).days == 1:
+                    streak += 1
+                else:
+                    break
+            
+            previous_date = current_date
+
+        return jsonify({"streak": streak}), 200
+    except Exception as e:
+        print(f"Error calculating sleep streak: {e}")
+        return jsonify({"error": "Failed to calculate sleep streak"}), 500
+    
 @app.route("/api/log-sleep", methods=["POST"])
 @jwt_required()
 def log_sleep():
@@ -246,28 +278,78 @@ def log_sleep():
     user_email = get_jwt_identity()
 
     sleep_hours = float(data.get("sleep_hours", 0))
+    sleep_rating = int(data.get("sleep_rating", 0))  
+    date = data.get("date", datetime.utcnow().strftime("%Y-%m-%d"))
+
+    if sleep_hours <= 0:
+        return jsonify({"error": "Invalid sleep hours"}), 400
+
     sleep_entry = {
         "user": user_email,
-        "date": data.get("date"),
+        "date": date,
         "sleep_hours": sleep_hours,
+        "sleep_rating": sleep_rating,  
     }
-    sleep_collection.insert_one(sleep_entry)
 
-    achievement = None
-    if sleep_hours > 6:
-        achievement = "🌙 Well-Rested Badge"
-        achievements_collection.insert_one({
-            "user": user_email,
-            "title": "🎖 Well-Rested Badge",
-            "description": "Congratulations! You've earned the Well-Rested Badge for sleeping more than 6 hours!",
-            "likes": 0,
-            "comments": []
-        })
+    try:
+        sleep_collection.insert_one(sleep_entry)
 
-    return jsonify({
-        "message": "Sleep data logged successfully!",
-        "achievement": achievement
-    }), 201
+        
+        achievement = None
+        if sleep_hours >= 7:
+            achievement = "🌙 Well-Rested Badge"
+            achievements_collection.insert_one({
+                "user": user_email,
+                "title": "🎖 Well-Rested Badge",
+                "description": "Congratulations! You've earned the Well-Rested Badge for sleeping more than 7 hours!",
+                "likes": 0,
+                "comments": []
+            })
+
+        return jsonify({
+            "message": "Sleep data logged successfully!",
+            "achievement": achievement
+        }), 201
+    except Exception as e:
+        print(f"Error logging sleep: {e}")
+        return jsonify({"error": "Failed to log sleep data"}), 500
+
+def calculate_sleep_quality(sleep_history):
+    if not sleep_history or len(sleep_history) < 3:
+        return 0
+
+    recent_sleep = sleep_history[:3]
+    avg_sleep = sum(float(entry["sleep_hours"]) for entry in recent_sleep) / 3
+
+    if avg_sleep >= 7:
+        return 85  
+    elif avg_sleep >= 6:
+        return 70  
+    else:
+        return 55
+      
+@app.route("/api/sleep-history", methods=["GET"])
+@jwt_required()
+def get_sleep_history():
+    user_email = get_jwt_identity()
+    
+    try:
+        sleep_data = list(sleep_collection.find(
+            {"user": user_email},
+            {"_id": 0, "date": 1, "sleep_hours": 1}
+        ).sort("date", -1).limit(7))
+
+        sleep_quality = calculate_sleep_quality(sleep_data)
+        sleep_distribution = calculate_sleep_distribution(sleep_data)
+
+        return jsonify({
+            "history": sleep_data,
+            "sleep_quality": sleep_quality,
+            "sleep_distribution": sleep_distribution
+        }), 200
+    except Exception as e:
+        print(f"Error fetching sleep history: {e}")
+        return jsonify({"error": "Failed to fetch sleep history"}), 500
 
 
 @app.route("/api/get-achievements",methods=["GET"])
@@ -277,6 +359,26 @@ def get_achievements():
     achievements=list(achievements_collection.find({"user": user_email},{"_id":0}))
     return jsonify(achievements)
 
+def calculate_sleep_distribution(sleep_history):
+    distribution = {
+        "<6h": 0,
+        "6-7h": 0,
+        "7-8h": 0,
+        ">8h": 0,
+    }
+
+    for entry in sleep_history:
+        hours = float(entry["sleep_hours"])
+        if hours < 6:
+            distribution["<6h"] += 1
+        elif hours < 7:
+            distribution["6-7h"] += 1
+        elif hours < 8:
+            distribution["7-8h"] += 1
+        else:
+            distribution[">8h"] += 1
+
+    return distribution
 
 @app.route("/api/like-achievement",methods=["POST"])
 @jwt_required()
