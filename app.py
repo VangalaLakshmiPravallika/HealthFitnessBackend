@@ -46,7 +46,6 @@ def calculate_bmi(weight, height_cm):
         return None
     return round(weight / (height_m ** 2), 2)
 
-
 @app.route("/api/store-profile", methods=["POST"])
 @jwt_required()
 def store_profile():
@@ -115,7 +114,6 @@ def get_bmi():
 
     bmi = calculate_bmi(weight, height)
     return jsonify({"bmi": bmi}), 200
-
 
 @app.route("/api/register",methods=["POST"])
 def register():
