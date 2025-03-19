@@ -41,6 +41,86 @@ jwt = JWTManager(app)
 def home():
     return jsonify({"message": "Flask API is running!"})
 
+@app.route("/api/save-health-data", methods=["POST"])
+@jwt_required()
+def save_health_data():
+    user_email = get_jwt_identity()
+    data = request.json
+
+    try:
+        height = float(data.get("height"))
+        weight = float(data.get("weight"))
+        age = int(data.get("age"))
+        gender = data.get("gender")
+
+        bmi = round(weight / ((height / 100) ** 2), 2)  # ✅ BMI Calculation
+
+        health_data = {
+            "email": user_email,
+            "age": age,
+            "weight": weight,
+            "height": height,
+            "bmi": bmi,
+            "gender": gender
+        }
+
+        profiles_collection.update_one({"email": user_email}, {"$set": health_data}, upsert=True)
+
+        return jsonify({"message": "Health data saved successfully!", "bmi": bmi}), 201
+
+    except (ValueError, TypeError):
+        return jsonify({"error": "Invalid input! Ensure height, weight, and age are numbers."}), 400
+
+@app.route("/api/get-bmi", methods=["GET"])
+@jwt_required()
+def get_bmi():
+    user_email = get_jwt_identity()
+    user = users_collection.find_one({"email": user_email}, {"_id": 0, "bmi": 1})
+
+    if not user or "bmi" not in user:
+        return jsonify({"error": "BMI not found. Please update your profile!"}), 404
+
+    return jsonify({"bmi": user["bmi"]}), 200
+
+@app.route("/api/store-profile", methods=["POST"])
+@jwt_required()
+def store_profile():
+    user_email = get_jwt_identity()
+    data = request.json
+
+    name = data.get("name")
+    age = data.get("age")
+    weight = data.get("weight")
+    height = data.get("height")
+    medications = data.get("medications", "None")
+
+    if not all([name, age, weight, height]):
+        return jsonify({"error": "Missing required fields"}), 400
+
+    try:
+        age = int(age)
+        weight = float(weight)
+        height = float(height)
+        bmi = round(weight / ((height / 100) ** 2), 2)  # BMI Calculation
+
+    except ValueError:
+        return jsonify({"error": "Invalid numeric values for age, weight, or height!"}), 400
+
+    profile_data = {
+        "email": user_email,
+        "name": name,
+        "age": age,
+        "weight": weight,
+        "height": height,
+        "bmi": bmi,
+        "medications": medications
+    }
+
+    profiles_collection.update_one({"email": user_email}, {"$set": profile_data}, upsert=True)
+
+    return jsonify({"message": "Profile updated successfully!", "bmi": bmi}), 200
+
+
 @app.route("/api/register",methods=["POST"])
 def register():
     data=request.json
