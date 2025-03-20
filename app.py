@@ -41,6 +41,8 @@ def calculate_bmi(weight_kg, height_cm):
         return None, "Invalid input"
 
     height_m = height_cm / 100  
+    bmi = round(weight_kg / (height_m ** 2), 2) 
+    return bmi
 
 
 default_challenges = [
@@ -97,26 +99,58 @@ def join_challenge():
 @app.route("/api/update-challenge-progress", methods=["POST"])
 @jwt_required()
 def update_challenge_progress():
+    """ Updates the progress of a user in a challenge """
     data = request.json
     user_email = get_jwt_identity()
     challenge_name = data.get("challenge_name")
     progress = data.get("progress")
 
     if not challenge_name or progress is None:
-        return jsonify({"error": "Challenge name and progress value are required"}), 400
+        return jsonify({"error": "Challenge name and progress are required"}), 400
 
-    challenge = user_challenges_collection.find_one({"email": user_email, "challenge_name": challenge_name})
-
+    challenge = challenges_collection.find_one({"name": challenge_name})
     if not challenge:
-        return jsonify({"error": "Challenge not found for this user"}), 404
+        return jsonify({"error": "Challenge not found"}), 404
 
-    new_progress = min(challenge["progress"] + progress, challenge["target"])  
+    user_progress = user_challenges_collection.find_one({"user": user_email, "challenge_name": challenge_name})
+
+    if not user_progress:
+        return jsonify({"error": "You have not joined this challenge"}), 403
+
+    new_progress = user_progress["progress"] + progress
+    is_completed = new_progress >= challenge["duration_days"]
+
     user_challenges_collection.update_one(
-        {"email": user_email, "challenge_name": challenge_name},
-        {"$set": {"progress": new_progress}}
+        {"user": user_email, "challenge_name": challenge_name},
+        {"$set": {"progress": new_progress, "completed": is_completed}}
     )
 
-    return jsonify({"message": f"Progress updated for {challenge_name}", "progress": new_progress}), 200
+    if is_completed:
+        return jsonify({"message": f"Congratulations! You completed '{challenge_name}' 🎉"}), 200
+
+    return jsonify({"message": "Progress updated successfully!", "new_progress": new_progress}), 200
+
+
+@app.route("/api/reset-challenge-progress", methods=["POST"])
+@jwt_required()
+def reset_challenge_progress():
+    """ Resets a user's progress in a challenge """
+    data = request.json
+    user_email = get_jwt_identity()
+    challenge_name = data.get("challenge_name")
+
+    if not challenge_name:
+        return jsonify({"error": "Challenge name is required"}), 400
+
+    result = user_challenges_collection.update_one(
+        {"user": user_email, "challenge_name": challenge_name},
+        {"$set": {"progress": 0, "completed": False}}
+    )
+
+    if result.modified_count > 0:
+        return jsonify({"message": f"Progress for '{challenge_name}' has been reset!"}), 200
+
+    return jsonify({"error": "Challenge progress not found"}), 404
 
 @app.route("/api/get-user-challenges", methods=["GET"])
 @jwt_required()
