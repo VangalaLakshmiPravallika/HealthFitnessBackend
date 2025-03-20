@@ -12,8 +12,6 @@ import logging
 from datetime import datetime
 from datetime import datetime, timedelta
 
-from itsdangerous import URLSafeTimedSerializer
-
 load_dotenv()
 
 app=Flask(__name__)
@@ -421,7 +419,7 @@ def get_notifications():
 @jwt_required()
 def join_group():
     data = request.json
-    user = get_jwt_identity()
+    user_email = get_jwt_identity()
     group_name = data.get("group_name")
 
     if not group_name:
@@ -430,19 +428,75 @@ def join_group():
     group = groups_collection.find_one({"name": group_name})
 
     if not group:
-        # Using `upsert=True` to prevent race conditions in concurrent requests
-        groups_collection.update_one(
-            {"name": group_name},
-            {"$setOnInsert": {"members": [user], "posts": []}}, 
-            upsert=True
-        )
-        return jsonify({"message": f"Group '{group_name}' created and joined successfully!"}), 201
+        return jsonify({"error": "Group does not exist. Use /api/create-group to create a new group."}), 404
 
-    if user not in group.get("members", []):
-        groups_collection.update_one({"name": group_name}, {"$addToSet": {"members": user}})
+    if user_email not in group.get("members", []):
+        groups_collection.update_one({"name": group_name}, {"$addToSet": {"members": user_email}})
         return jsonify({"message": f"Joined {group_name} successfully!"}), 200
 
     return jsonify({"message": f"Already a member of {group_name}!"}), 200
+
+@app.route("/api/create-group", methods=["POST"])
+@jwt_required()
+def create_group():
+    data = request.json
+    user_email = get_jwt_identity()
+    group_name = data.get("group_name")
+
+    if not group_name:
+        return jsonify({"error": "Group name is required"}), 400
+
+    existing_group = groups_collection.find_one({"name": group_name})
+    if existing_group:
+        return jsonify({"error": "Group already exists"}), 400
+
+    new_group = {
+        "name": group_name,
+        "members": [user_email], 
+        "posts": [],
+        "created_at": datetime.utcnow().isoformat(),
+    }
+
+    groups_collection.insert_one(new_group)
+
+    return jsonify({"message": f"Group '{group_name}' created successfully!"}), 201
+
+@app.route("/api/get-group-details/<group_name>", methods=["GET"])
+@jwt_required()
+def get_group_details(group_name):
+    user_email = get_jwt_identity()
+
+    group = groups_collection.find_one({"name": group_name}, {"_id": 0})
+
+    if not group:
+        return jsonify({"error": "Group not found"}), 404
+
+    if user_email not in group.get("members", []):
+        return jsonify({"error": "You are not a member of this group"}), 403
+
+    return jsonify(group), 200
+
+@app.route("/api/delete-group", methods=["POST"])
+@jwt_required()
+def delete_group():
+    data = request.json
+    user_email = get_jwt_identity()
+    group_name = data.get("group_name")
+
+    if not group_name:
+        return jsonify({"error": "Group name is required"}), 400
+
+    group = groups_collection.find_one({"name": group_name})
+
+    if not group:
+        return jsonify({"error": "Group not found"}), 404
+
+    if group.get("members", [])[0] != user_email:
+        return jsonify({"error": "Only the group creator can delete this group"}), 403
+
+    groups_collection.delete_one({"name": group_name})
+
+    return jsonify({"message": f"Group '{group_name}' deleted successfully!"}), 200
 
 @app.route("/api/leave-group", methods=["POST"])
 @jwt_required()
@@ -530,7 +584,6 @@ def like_post():
     )
 
     if result.modified_count > 0:
-        # ✅ Store notification
         db.notifications.insert_one({
             "user": post_owner,
             "message": f"{user_email} liked your post!",
@@ -564,7 +617,6 @@ def comment_post():
     )
 
     if result.modified_count > 0:
-        # ✅ Store notification
         db.notifications.insert_one({
             "user": post_owner,
             "message": f"{user_email} commented on your post: {comment_text}",
@@ -950,10 +1002,6 @@ def test_read_excel():
         })
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)})
-
-import os
-
-import os
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))  # Use Render's assigned port
