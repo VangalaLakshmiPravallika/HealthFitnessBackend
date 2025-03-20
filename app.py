@@ -417,27 +417,32 @@ def get_notifications():
 
 
 
-@app.route("/api/join-group",methods=["POST"])
+@app.route("/api/join-group", methods=["POST"])
 @jwt_required()
 def join_group():
-    data=request.json
-    user=get_jwt_identity()
-    group_name=data.get("group_name")
+    data = request.json
+    user = get_jwt_identity()
+    group_name = data.get("group_name")
 
     if not group_name:
-        return jsonify({"error":"Group name is required"}),400
+        return jsonify({"error": "Group name is required"}), 400
 
-    group = groups_collection.find_one({"name":group_name})
+    group = groups_collection.find_one({"name": group_name})
 
     if not group:
-        groups_collection.insert_one({"name":group_name,"members": [user],"posts":[]})
-        return jsonify({"message": f"Group '{group_name}'created and joined successfully!"}),201
+        # Using `upsert=True` to prevent race conditions in concurrent requests
+        groups_collection.update_one(
+            {"name": group_name},
+            {"$setOnInsert": {"members": [user], "posts": []}}, 
+            upsert=True
+        )
+        return jsonify({"message": f"Group '{group_name}' created and joined successfully!"}), 201
 
-    if user not in group["members"]:
-        groups_collection.update_one({"name":group_name},{"$push":{"members": user}})
-        return jsonify({"message":f"Joined {group_name} successfully!"}),200
+    if user not in group.get("members", []):
+        groups_collection.update_one({"name": group_name}, {"$addToSet": {"members": user}})
+        return jsonify({"message": f"Joined {group_name} successfully!"}), 200
 
-    return jsonify({"message":f"Already a member of {group_name}!"}),200
+    return jsonify({"message": f"Already a member of {group_name}!"}), 200
 
 @app.route("/api/leave-group", methods=["POST"])
 @jwt_required()
