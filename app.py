@@ -30,6 +30,8 @@ progress_collection=db.progress
 steps_collection = db.steps
 users_collection = db.users
 profiles_collection = db.profiles
+challenges_collection = db.challenges
+user_challenges_collection = db.user_challenges
 
 app.config["JWT_SECRET_KEY"]=os.getenv("JWT_SECRET_KEY")
 jwt = JWTManager(app)
@@ -37,6 +39,110 @@ jwt = JWTManager(app)
 @app.route("/",methods=["GET"])
 def home():
     return jsonify({"message": "Flask API is running!"})
+
+@app.route("/api/create-challenge", methods=["POST"])
+@jwt_required()
+def create_challenge():
+    data = request.json
+    user_email = get_jwt_identity()
+
+    challenge_name = data.get("name")
+    description = data.get("description")
+    duration_days = data.get("duration_days")
+    goal = data.get("goal")
+
+    if not all([challenge_name, description, duration_days, goal]):
+        return jsonify({"error": "All fields are required"}), 400
+
+    if challenges_collection.find_one({"name": challenge_name}):
+        return jsonify({"error": "Challenge with this name already exists"}), 400
+
+    new_challenge = {
+        "name": challenge_name,
+        "description": description,
+        "created_by": user_email,
+        "duration_days": int(duration_days),
+        "goal": goal,
+        "participants": [],
+        "leaderboard": [],
+        "created_at": datetime.utcnow(),
+    }
+
+    challenges_collection.insert_one(new_challenge)
+
+    return jsonify({"message": "Challenge created successfully!"}), 201
+
+@app.route("/api/get-challenges", methods=["GET"])
+@jwt_required()
+def get_challenges():
+    challenges = list(challenges_collection.find({}, {"_id": 0}))
+    return jsonify(challenges)
+
+@app.route("/api/join-challenge", methods=["POST"])
+@jwt_required()
+def join_challenge():
+    data = request.json
+    user_email = get_jwt_identity()
+    challenge_name = data.get("challenge_name")
+
+    challenge = challenges_collection.find_one({"name": challenge_name})
+    if not challenge:
+        return jsonify({"error": "Challenge not found"}), 404
+
+    if user_email in challenge.get("participants", []):
+        return jsonify({"message": "Already joined this challenge!"}), 200
+
+    # Add user to the challenge
+    challenges_collection.update_one(
+        {"name": challenge_name}, {"$addToSet": {"participants": user_email}}
+    )
+
+    # Track user's challenge progress
+    user_challenges_collection.insert_one({
+        "user": user_email,
+        "challenge_name": challenge_name,
+        "progress": 0,
+        "joined_at": datetime.utcnow(),
+    })
+
+    return jsonify({"message": f"Successfully joined {challenge_name}!"}), 200
+
+
+@app.route("/api/update-challenge-progress", methods=["POST"])
+@jwt_required()
+def update_challenge_progress():
+    data = request.json
+    user_email = get_jwt_identity()
+    challenge_name = data.get("challenge_name")
+    progress = data.get("progress")
+
+    if not progress:
+        return jsonify({"error": "Progress value is required"}), 400
+
+    challenge = challenges_collection.find_one({"name": challenge_name})
+    if not challenge:
+        return jsonify({"error": "Challenge not found"}), 404
+
+    # Update progress
+    user_challenges_collection.update_one(
+        {"user": user_email, "challenge_name": challenge_name},
+        {"$set": {"progress": progress, "updated_at": datetime.utcnow()}},
+        upsert=True
+    )
+
+    return jsonify({"message": "Progress updated successfully!"}), 200
+
+
+@app.route("/api/get-leaderboard/<challenge_name>", methods=["GET"])
+@jwt_required()
+def get_leaderboard(challenge_name):
+    leaderboard = list(
+        user_challenges_collection.find({"challenge_name": challenge_name}, {"_id": 0, "user": 1, "progress": 1})
+    )
+
+    leaderboard = sorted(leaderboard, key=lambda x: x["progress"], reverse=True)
+
+    return jsonify(leaderboard)
 
 def calculate_bmi(weight, height_cm):
     height_m = height_cm / 100  
