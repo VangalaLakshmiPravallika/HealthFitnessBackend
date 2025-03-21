@@ -233,6 +233,50 @@ def store_profile():
 
     return jsonify({"message": "Profile stored successfully", "bmi": bmi}), 201
 
+@app.route("/api/edit-profile", methods=["PUT"])
+@jwt_required()
+def edit_profile():
+    user_email = get_jwt_identity()
+    data = request.json
+    
+    name = data.get("name")
+    age = data.get("age")
+    gender = data.get("gender")
+    height = data.get("height")
+    weight = data.get("weight")
+
+    if not any([name, age, gender, height, weight]):
+        return jsonify({"error": "No fields to update"}), 400
+    
+    try:
+        if age:
+            age = int(age)
+        if height:
+            height = float(height)
+        if weight:
+            weight = float(weight)
+    except ValueError:
+        return jsonify({"error": "Invalid data format"}), 400
+
+    update_data = {}
+    if name:
+        update_data["name"] = name
+    if age:
+        update_data["age"] = age
+    if gender:
+        update_data["gender"] = gender
+    if height:
+        update_data["height"] = height
+    if weight:
+        update_data["weight"] = weight
+
+    if weight and height:
+        update_data["bmi"] = calculate_bmi(weight, height)
+
+    profiles_collection.update_one({"email": user_email}, {"$set": update_data})
+
+    return jsonify({"message": "Profile updated successfully"}), 200
+
 @app.route("/api/get-profile", methods=["GET"])
 @jwt_required()
 def get_profile():
