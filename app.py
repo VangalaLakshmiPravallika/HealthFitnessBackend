@@ -99,7 +99,6 @@ def join_challenge():
 @app.route("/api/update-challenge-progress", methods=["POST"])
 @jwt_required()
 def update_challenge_progress():
-    """ Updates the progress of a user in a challenge """
     data = request.json
     user_email = get_jwt_identity()
     challenge_name = data.get("challenge_name")
@@ -112,16 +111,16 @@ def update_challenge_progress():
     if not challenge:
         return jsonify({"error": "Challenge not found"}), 404
 
-    user_progress = user_challenges_collection.find_one({"user": user_email, "challenge_name": challenge_name})
+    user_progress = user_challenges_collection.find_one({"email": user_email, "challenge_name": challenge_name})
 
     if not user_progress:
         return jsonify({"error": "You have not joined this challenge"}), 403
 
     new_progress = user_progress["progress"] + progress
-    is_completed = new_progress >= challenge["duration_days"]
+    is_completed = new_progress >= challenge["target"]  # Use "target" instead of "duration_days"
 
     user_challenges_collection.update_one(
-        {"user": user_email, "challenge_name": challenge_name},
+        {"email": user_email, "challenge_name": challenge_name},
         {"$set": {"progress": new_progress, "completed": is_completed}}
     )
 
@@ -134,7 +133,6 @@ def update_challenge_progress():
 @app.route("/api/reset-challenge-progress", methods=["POST"])
 @jwt_required()
 def reset_challenge_progress():
-    """ Resets a user's progress in a challenge """
     data = request.json
     user_email = get_jwt_identity()
     challenge_name = data.get("challenge_name")
@@ -143,7 +141,7 @@ def reset_challenge_progress():
         return jsonify({"error": "Challenge name is required"}), 400
 
     result = user_challenges_collection.update_one(
-        {"user": user_email, "challenge_name": challenge_name},
+        {"email": user_email, "challenge_name": challenge_name},
         {"$set": {"progress": 0, "completed": False}}
     )
 
@@ -194,7 +192,7 @@ def add_challenge():
 
     challenges_collection.insert_one(new_challenge)
 
-    return jsonify({"message": "New challenge added!", "challenge": new_challenge}), 201
+    return jsonify({"message": "New challenge added!", "challenge": new_challenge}), 2011
 
 @app.route("/api/store-profile", methods=["POST"])
 @jwt_required()
