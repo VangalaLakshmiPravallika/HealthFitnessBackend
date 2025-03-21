@@ -418,6 +418,19 @@ def get_sleep_streak():
     except Exception as e:
         print(f"Error calculating sleep streak: {e}")
         return jsonify({"error": "Failed to calculate sleep streak"}), 500
+
+@app.route("/api/reset-sleep", methods=["POST"])
+@jwt_required()
+def reset_sleep():
+    user_email = get_jwt_identity()
+    
+    # Reset sleep value in the database
+    user_challenges_collection.update_one(
+        {"email": user_email, "challenge_name": "Sleep Tracker"},
+        {"$set": {"progress": 0}}
+    )
+    
+    return jsonify({"message": "Sleep value reset successfully!"}), 200
     
 @app.route("/api/log-sleep", methods=["POST"])
 @jwt_required()
