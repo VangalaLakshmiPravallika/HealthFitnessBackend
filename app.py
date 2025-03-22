@@ -65,6 +65,15 @@ def get_challenges():
     challenges = list(challenges_collection.find({}, {"_id": 0}))
     return jsonify({"challenges": challenges}), 200
 
+@app.route("/api/news", methods=["GET"])
+def get_news():
+    # Fetch news from NewsAPI or another source
+    news = [
+        {"title": "News 1", "description": "Description 1"},
+        {"title": "News 2", "description": "Description 2"},
+    ]
+    return jsonify(news)
+
 @app.route("/api/join-challenge", methods=["POST"])
 @jwt_required()
 def join_challenge():
