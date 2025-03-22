@@ -8,8 +8,12 @@ from pymongo import MongoClient
 from dotenv import load_dotenv
 from datetime import datetime
 import logging
+import requests
 from datetime import datetime
 from datetime import datetime, timedelta
+
+NEWS_API_KEY = os.getenv("NEWS_API_KEY")  
+NEWS_API_URL = "https://newsapi.org/v2/everything"
 
 load_dotenv()
 
@@ -67,12 +71,38 @@ def get_challenges():
 
 @app.route("/api/news", methods=["GET"])
 def get_news():
-    # Fetch news from NewsAPI or another source
-    news = [
-        {"title": "News 1", "description": "Description 1"},
-        {"title": "News 2", "description": "Description 2"},
-    ]
-    return jsonify(news)
+    try:
+        # Define the query for health, fitness, and diet-related news
+        query = "health fitness diet"
+        params = {
+            "q": query,
+            "sortBy": "publishedAt",
+            "pageSize": 10,  # Number of articles to fetch
+            "apiKey": NEWS_API_KEY,
+        }
+
+        # Fetch news from NewsAPI
+        response = requests.get(NEWS_API_URL, params=params)
+        response.raise_for_status()  # Raise an error for bad responses (4xx or 5xx)
+        news_data = response.json()
+
+        # Extract relevant fields from the response
+        articles = news_data.get("articles", [])
+        news = [
+            {
+                "title": article.get("title", "No title"),
+                "description": article.get("description", "No description"),
+                "url": article.get("url", "#"),
+                "urlToImage": article.get("urlToImage", ""),
+                "publishedAt": article.get("publishedAt", ""),
+            }
+            for article in articles
+        ]
+
+        return jsonify(news)
+    except requests.exceptions.RequestException as e:
+        # Handle errors (e.g., network issues, invalid API key)
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/api/join-challenge", methods=["POST"])
 @jwt_required()
