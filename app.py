@@ -321,26 +321,41 @@ def register():
     
     return jsonify({"message":"User registered successfully!"}),201
 
-@app.route("/api/login",methods=["POST"])
+@app.route("/api/login", methods=["POST"])
 def login():
-    data=request.json
-    email=data.get("email")
-    password=data.get("password")
+    data = request.json
+    email = data.get("email")
+    password = data.get("password")
 
-    user=users_collection.find_one({"email":email})
+    user = users_collection.find_one({"email": email})
 
     if not user:
-        return jsonify({"error":"Invalid email or password"}),401
+        return jsonify({"error": "Invalid email or password"}), 401
 
-    stored_password=user["password"]
-    if isinstance(stored_password,str):
-        stored_password=stored_password.encode('utf-8')
+    stored_password = user["password"]
+    if isinstance(stored_password, str):
+        stored_password = stored_password.encode('utf-8')
 
-    if bcrypt.checkpw(password.encode('utf-8'),stored_password):
-        token = create_access_token(identity=email)
-        return jsonify({"message":"Login successful","token":token}),200
+    if not bcrypt.checkpw(password.encode('utf-8'), stored_password):
+        return jsonify({"error": "Invalid email or password"}), 401
 
-    return jsonify({"error":"Invalid email or password"}),401
+    profile = profiles_collection.find_one({"email": email})
+    profile_complete = (
+        profile
+        and profile.get("name")
+        and profile.get("age")
+        and profile.get("gender")
+        and profile.get("height")
+        and profile.get("weight")
+    )
+
+    token = create_access_token(identity=email)
+
+    return jsonify({
+        "message": "Login successful",
+        "token": token,
+        "profileComplete": profile_complete
+    }), 200
 
 def get_current_date():
     return datetime.utcnow().strftime("%Y-%m-%d")
