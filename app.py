@@ -1221,38 +1221,61 @@ def get_fitness_level():
 @jwt_required()
 def get_workout_plan():
     user_email = get_jwt_identity()
-    user_data = db.fitness_assessment.find_one({"user": user_email})
 
-    if not user_data:
-        return jsonify({"error": "No fitness level found. Please complete the assessment first."}), 400
+    user_profile = profiles_collection.find_one({"email": user_email})
+    if not user_profile or "bmi" not in user_profile:
+        return jsonify({"error": "BMI not found. Please complete your profile first."}), 400
 
-    fitness_level = user_data["level"]
+    bmi = user_profile["bmi"]
 
     workout_plans = {
-        "Beginner 🟢": [
-            {"day": "Day 1", "workout": "Jumping Jacks x 30 sec, Squats x 10, Push-ups x 5"},
-            {"day": "Day 2", "workout": "High Knees x 30 sec, Lunges x 10, Plank x 20 sec"},
-            {"day": "Day 3", "workout": "Mountain Climbers x 30 sec, Wall Sit x 20 sec, Crunches x 15"},
-            {"day": "Day 4", "workout": "Jogging in Place x 30 sec, Bridges x 10, Shoulder Taps x 10"},
-            {"day": "Day 5", "workout": "Burpees x 5, Side Lunges x 10, Plank x 30 sec"},
+        "Underweight": [
+            {"day": "Day 1", "workout": "Strength Training: Squats x 15, Push-ups x 10, Plank x 30 sec"},
+            {"day": "Day 2", "workout": "Cardio: Jumping Jacks x 1 min, High Knees x 1 min, Rest x 30 sec"},
+            {"day": "Day 3", "workout": "Strength Training: Lunges x 10, Dumbbell Rows x 10, Side Plank x 20 sec"},
+            {"day": "Day 4", "workout": "Cardio: Jogging in Place x 2 min, Burpees x 10, Rest x 30 sec"},
+            {"day": "Day 5", "workout": "Strength Training: Deadlifts x 10, Shoulder Press x 10, Plank x 30 sec"},
         ],
-        "Intermediate 🟡": [
-            {"day": "Day 1", "workout": "Jump Rope x 1 min, Squats x 20, Push-ups x 10"},
-            {"day": "Day 2", "workout": "Burpees x 10, Lunges x 15, Plank x 40 sec"},
-            {"day": "Day 3", "workout": "Mountain Climbers x 30 sec, Bicycle Crunches x 20, Wall Sit x 30 sec"},
-            {"day": "Day 4", "workout": "Jogging x 3 min, Box Jumps x 10, Plank Shoulder Taps x 15"},
-            {"day": "Day 5", "workout": "Jump Squats x 15, Bulgarian Split Squats x 10, Plank x 1 min"},
+        "Normal": [
+            {"day": "Day 1", "workout": "Cardio: Jump Rope x 2 min, Mountain Climbers x 1 min, Rest x 30 sec"},
+            {"day": "Day 2", "workout": "Strength Training: Squats x 20, Push-ups x 15, Plank x 40 sec"},
+            {"day": "Day 3", "workout": "Cardio: Running x 5 min, High Knees x 1 min, Rest x 30 sec"},
+            {"day": "Day 4", "workout": "Strength Training: Lunges x 15, Dumbbell Rows x 15, Side Plank x 30 sec"},
+            {"day": "Day 5", "workout": "Cardio: Burpees x 15, Jumping Jacks x 1 min, Rest x 30 sec"},
         ],
-        "Advanced 🔴": [
-            {"day": "Day 1", "workout": "Sprint x 2 min, Push-ups x 30, Squats x 30"},
-            {"day": "Day 2", "workout": "Burpees x 20, Pull-ups x 10, Hanging Leg Raises x 15"},
-            {"day": "Day 3", "workout": "Box Jumps x 20, Dead Hangs x 30 sec, Dips x 15"},
-            {"day": "Day 4", "workout": "Running x 5 min, Power Cleans x 10, Plank Hold x 2 min"},
-            {"day": "Day 5", "workout": "Jump Lunges x 20, Front Squats x 15, Push Press x 12"},
+        "Overweight": [
+            {"day": "Day 1", "workout": "Low-Impact Cardio: Walking x 10 min, Step-ups x 10, Rest x 30 sec"},
+            {"day": "Day 2", "workout": "Strength Training: Bodyweight Squats x 15, Wall Push-ups x 10, Plank x 20 sec"},
+            {"day": "Day 3", "workout": "Low-Impact Cardio: Cycling x 10 min, Seated Leg Raises x 10, Rest x 30 sec"},
+            {"day": "Day 4", "workout": "Strength Training: Lunges x 10, Dumbbell Rows x 10, Side Plank x 20 sec"},
+            {"day": "Day 5", "workout": "Low-Impact Cardio: Swimming x 10 min, Step-ups x 10, Rest x 30 sec"},
+        ],
+        "Obese": [
+            {"day": "Day 1", "workout": "Low-Impact Cardio: Walking x 5 min, Chair Squats x 10, Rest x 30 sec"},
+            {"day": "Day 2", "workout": "Strength Training: Seated Leg Raises x 10, Wall Push-ups x 5, Plank x 10 sec"},
+            {"day": "Day 3", "workout": "Low-Impact Cardio: Cycling x 5 min, Step-ups x 5, Rest x 30 sec"},
+            {"day": "Day 4", "workout": "Strength Training: Seated Dumbbell Rows x 10, Chair Squats x 10, Side Plank x 10 sec"},
+            {"day": "Day 5", "workout": "Low-Impact Cardio: Swimming x 5 min, Seated Leg Raises x 10, Rest x 30 sec"},
         ],
     }
 
-    return jsonify({"workout_plan": workout_plans.get(fitness_level, [])})
+    if bmi < 18.5:
+        bmi_category = "Underweight"
+    elif 18.5 <= bmi < 25:
+        bmi_category = "Normal"
+    elif 25 <= bmi < 30:
+        bmi_category = "Overweight"
+    else:
+        bmi_category = "Obese"
+
+    workout_plan = workout_plans.get(bmi_category, [])
+
+    return jsonify({
+        "bmi": bmi,
+        "bmi_category": bmi_category,
+        "workout_plan": workout_plan
+    })
+
 @app.route("/api/fitness-assessment", methods=["POST"])
 @jwt_required()
 def fitness_assessment():
