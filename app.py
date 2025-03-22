@@ -7,7 +7,6 @@ import bcrypt
 from pymongo import MongoClient
 from dotenv import load_dotenv
 from datetime import datetime
-import traceback
 import logging
 from datetime import datetime
 from datetime import datetime, timedelta
@@ -117,8 +116,7 @@ def update_challenge_progress():
         return jsonify({"error": "You have not joined this challenge"}), 403
 
     new_progress = user_progress["progress"] + progress
-    is_completed = new_progress >= challenge["target"]  # Use "target" instead of "duration_days"
-
+    is_completed = new_progress >= challenge["target"]  
     user_challenges_collection.update_one(
         {"email": user_email, "challenge_name": challenge_name},
         {"$set": {"progress": new_progress, "completed": is_completed}}
@@ -1226,6 +1224,6 @@ def test_read_excel():
         return jsonify({"status": "error", "message": str(e)})
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))  # Use Render's assigned port
+    port = int(os.environ.get("PORT", 10000)) 
     app.run(host="0.0.0.0", port=port, debug=True)
 
