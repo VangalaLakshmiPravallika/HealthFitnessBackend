@@ -1,9 +1,5 @@
 #!/bin/bash
 
-# Install Node.js dependencies
-echo "Installing Node.js dependencies..."
-npm install
-
 # Start the Node.js backend
 echo "Starting Node.js backend..."
 node server.js &
