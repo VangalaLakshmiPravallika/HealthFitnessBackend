@@ -11,6 +11,8 @@ import logging
 import requests
 from datetime import datetime
 from datetime import datetime, timedelta
+import pyotp
+import smtplib
 
 NEWS_API_KEY = os.getenv("NEWS_API_KEY")  
 NEWS_API_URL = "https://newsapi.org/v2/everything"
@@ -62,6 +64,70 @@ if challenges_collection.count_documents({}) == 0:
 @app.route("/",methods=["GET"])
 def home():
     return jsonify({"message": "Flask API is running!"})
+
+@app.route('/generate-otp', methods=['POST'])
+def generate_otp():
+    data = request.json
+    email = data.get('email')
+
+    # Check if the user exists
+    user = users_collection.find_one({'email': email})
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+
+    # Generate OTP
+    totp = pyotp.TOTP(pyotp.random_base32())
+    otp = totp.now()
+
+    # Store OTP in the user document
+    users_collection.update_one(
+        {'email': email},
+        {'$set': {'otp': otp}}
+    )
+
+    try:
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
+        server.login('your_email@gmail.com', 'your_password')
+        server.sendmail('your_email@gmail.com', email, f'Your OTP is: {otp}')
+        server.quit()
+    except Exception as e:
+        return jsonify({'error': 'Failed to send OTP'}), 500
+
+    return jsonify({'message': 'OTP sent successfully'}), 200
+
+@app.route('/verify-otp', methods=['POST'])
+def verify_otp():
+    data = request.json
+    email = data.get('email')
+    otp = data.get('otp')
+
+    user = users_collection.find_one({'email': email})
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+
+    
+    if user.get('otp') == otp:
+        users_collection.update_one(
+            {'email': email},
+            {'$unset': {'otp': ''}}
+        )
+        return jsonify({'message': 'OTP verified successfully'}), 200
+    else:
+        return jsonify({'error': 'Invalid OTP'}), 400
+    
+@app.route('/reset-password', methods=['POST'])
+def reset_password():
+    data = request.json
+    email = data.get('email')
+    new_password = data.get('new_password')
+
+    users_collection.update_one(
+        {'email': email},
+        {'$set': {'password': new_password}}  
+    )
+
+    return jsonify({'message': 'Password reset successfully'}), 200
 
 @app.route("/api/get-challenges", methods=["GET"])
 @jwt_required()
