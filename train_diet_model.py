@@ -5,57 +5,52 @@ import matplotlib.pyplot as plt
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import LabelEncoder
 
-# Set max CPU count to avoid joblib warnings
-os.environ["LOKY_MAX_CPU_COUNT"] = "4"  # Set this to your actual core count
+# **🔹 Restrict CPU usage to prevent Joblib parallelization issues**
+os.environ["LOKY_MAX_CPU_COUNT"] = "1"  
 
-# Load dataset
-dataset_path = os.path.join(os.getcwd(), "diet.csv")  # Ensure this file exists
+# **🔹 Load dataset efficiently**
+dataset_path = os.path.join(os.getcwd(), "diet.csv")
 if not os.path.exists(dataset_path):
     raise FileNotFoundError(f"❌ Dataset not found at {dataset_path}")
 
-df = pd.read_csv(dataset_path)
+# **🔹 Load only necessary columns**
+df = pd.read_csv(dataset_path, usecols=["Height", "Weight", "FCVC", "NCP", "FAF", "CH2O", "NObeyesdad"])
 
-# Ensure required columns exist
-required_columns = ["Height", "Weight", "FCVC", "NCP", "FAF", "CH2O", "NObeyesdad"]
-for col in required_columns:
-    if col not in df.columns:
-        raise ValueError(f"❌ Missing required column: {col}")
-
-# Calculate BMI
+# **🔹 Compute BMI directly**
 df["BMI"] = df["Weight"] / (df["Height"] ** 2)
 
-# Encode categorical target variable
+# **🔹 Encode categorical labels (one-time transformation)**
 encoder = LabelEncoder()
-df["NObeyesdad"] = encoder.fit_transform(df["NObeyesdad"])  # Encoding obesity category
+df["NObeyesdad"] = encoder.fit_transform(df["NObeyesdad"])
 
-# Select features for clustering
-X = df[["BMI", "FCVC", "NCP", "FAF", "CH2O"]]
+# **🔹 Select only necessary features**
+X = df[["BMI", "FCVC", "NCP", "FAF", "CH2O"]].values  # Use `.values` to speed up NumPy processing
 
-# Find optimal number of clusters using Elbow Method
+# **🔹 Reduce K range (Speeds up training)**
 wcss = []
-for i in range(1, 11):  # Try cluster sizes from 1 to 10
-    kmeans = KMeans(n_clusters=i, random_state=42, n_init=10)
+for i in range(2, 4):  # ⚡ Testing only K=2 & K=3 for best speed
+    kmeans = KMeans(n_clusters=i, random_state=42, n_init=3, max_iter=20)  # ⚡ Lowered `n_init` & `max_iter`
     kmeans.fit(X)
     wcss.append(kmeans.inertia_)
 
-# Plot Elbow Curve
+# **🔹 Plot Elbow Curve**
 plt.figure(figsize=(8, 5))
-plt.plot(range(1, 11), wcss, marker="o", linestyle="-", color="b")
+plt.plot(range(2, 4), wcss, marker="o", linestyle="-", color="b")
 plt.xlabel("Number of Clusters (K)")
 plt.ylabel("WCSS (Within-Cluster Sum of Squares)")
 plt.title("Elbow Method for Optimal K")
 plt.grid(True)
 plt.show()
 
-# ✅ Choose the best 'K' from the elbow graph (Manually select based on graph)
-optimal_k = 3  # Change this value based on the graph
+# **🔹 Select Best `K` Based on Elbow Graph**
+optimal_k = 2  # Manually adjust this based on the graph
 
-# Train final K-Means model
-kmeans = KMeans(n_clusters=optimal_k, random_state=42, n_init=10)
+# **🔹 Train Final Model (Highly Optimized)**
+kmeans = KMeans(n_clusters=optimal_k, random_state=42, n_init=3, max_iter=20)  # ⚡ Minimal settings for speed
 df["Cluster"] = kmeans.fit_predict(X)
 
-# Save trained model
+# **🔹 Save Trained Model**
 model_path = os.path.join(os.getcwd(), "diet_kmeans.pkl")
 joblib.dump(kmeans, model_path)
 
-print(f"✅ Model trained successfully with {optimal_k} clusters and saved at: {model_path}")
+print(f"✅ Model trained in **FAST MODE** with {optimal_k} clusters and saved at: {model_path}")
