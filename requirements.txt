@@ -10,3 +10,4 @@ openpyxl
 requests
 Flask-SQLAlchemy
 pyotp
+joblib
