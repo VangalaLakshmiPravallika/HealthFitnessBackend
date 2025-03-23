@@ -43,6 +43,19 @@ notifications_collection = db.notifications
 app.config["JWT_SECRET_KEY"]=os.getenv("JWT_SECRET_KEY")
 jwt = JWTManager(app)
 
+MODEL_PATH = os.path.join(os.getcwd(), "diet_kmeans.pkl")
+
+kmeans = None
+try:
+    if os.path.exists(MODEL_PATH):
+        print("🔍 Loading model from:", MODEL_PATH)
+        kmeans = joblib.load(MODEL_PATH)
+        print("✅ Model loaded successfully!")
+    else:
+        print("❌ Model file not found!")
+except Exception as e:
+    print(f"❌ ERROR: Model could not be loaded: {e}")
+
 def calculate_bmi(weight_kg, height_cm):
     if height_cm <= 0 or weight_kg <= 0:
         return None, "Invalid input"
@@ -73,16 +86,21 @@ def recommend_diet():
     user_email = get_jwt_identity()
 
     try:
+        print(f"📩 Fetching user data for: {user_email}")
+
         # Fetch user's stored BMI
         user = profiles_collection.find_one({"email": user_email}, {"_id": 0, "bmi": 1})
         if not user or "bmi" not in user:
+            print("❌ BMI not found. User must update their profile.")
             return jsonify({"error": "BMI not found. Please update your profile."}), 400
 
         bmi = user["bmi"]
+        print(f"✅ Retrieved BMI: {bmi}")
 
         # Fetch user's meal log & calculate nutrition summary
         meals = list(meal_collection.find({"user": user_email}, {"_id": 0}))
         if not meals:
+            print("⚠ No meal data found for user.")
             return jsonify({"message": "No meal data available"}), 400
 
         total_nutrition = {
@@ -91,12 +109,23 @@ def recommend_diet():
             "carbs": sum(meal.get("nutrition", {}).get("carbs", 0) for meal in meals),
             "fats": sum(meal.get("nutrition", {}).get("fats", 0) for meal in meals),
         }
+        print(f"📊 Nutrition Summary: {total_nutrition}")
 
         # Load trained K-Means model
-        kmeans_model = joblib.load("diet_kmeans.pkl")
+        model_path = os.path.join(os.getcwd(), "diet_kmeans.pkl")
+        if not os.path.exists(model_path):
+            print(f"❌ Model file not found at {model_path}")
+            return jsonify({"error": "Diet model not available"}), 500
+
+        kmeans_model = joblib.load(model_path)
+        print("✅ Model loaded successfully!")
 
         # Predict Cluster (Using BMI & default values for meal frequency)
-        cluster = kmeans_model.predict([[bmi, 3, 4, 2, 2]])[0]  
+        user_data = [[bmi, 3, 4, 2, 2]]
+        print(f"📊 Predicting cluster for input: {user_data}")
+
+        cluster = kmeans_model.predict(user_data)[0]
+        print(f"✅ Predicted Cluster: {cluster}")
 
         # Define diet plans per cluster
         diet_plans = {
@@ -123,8 +152,8 @@ def recommend_diet():
             }
         }
 
-        recommended_diet = diet_plans[cluster]
-
+        recommended_diet = diet_plans.get(cluster, {"goal": "Balanced Diet", "breakfast": "Smoothie", "lunch": "Quinoa Salad", "dinner": "Grilled Fish"})
+        
         return jsonify({
             "bmi": bmi,
             "overall_nutrition": total_nutrition,
@@ -132,6 +161,7 @@ def recommend_diet():
         }), 200
 
     except Exception as e:
+        print(f"❌ ERROR: {str(e)}")
         return jsonify({"error": "Failed to recommend diet", "details": str(e)}), 500
 
 @app.route('/generate-otp', methods=['POST'])
