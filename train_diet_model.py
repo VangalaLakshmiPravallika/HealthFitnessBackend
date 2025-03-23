@@ -6,8 +6,10 @@ from sklearn.preprocessing import LabelEncoder
 import os
 
 # Load dataset
-dataset_path = os.path.join(os.getcwd(), "diet.csv")  # Ensure the file is in backend/
+dataset_path = os.path.join(os.getcwd(), "diet.csv")  
 df = pd.read_csv(dataset_path)
+os.environ["LOKY_MAX_CPU_COUNT"] = "4"  
+
 
 # Ensure required columns exist
 required_columns = ["Height", "Weight", "FCVC", "NCP", "FAF", "CH2O", "NObeyesdad"]
