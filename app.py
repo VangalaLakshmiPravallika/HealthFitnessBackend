@@ -14,6 +14,14 @@ from datetime import datetime, timedelta
 import pyotp
 import smtplib
 import joblib
+import sys
+print("✅ Flask is using Python:", sys.executable)
+
+try:
+    import sklearn
+    print("✅ scikit-learn is installed:", sklearn.__version__)
+except ImportError:
+    print("❌ ERROR: scikit-learn is NOT available in this environment!")
 
 NEWS_API_KEY = os.getenv("NEWS_API_KEY")  
 NEWS_API_URL = "https://newsapi.org/v2/everything"
@@ -83,6 +91,16 @@ def home():
 @app.route("/api/recommend-diet", methods=["GET"])
 @jwt_required()
 def recommend_diet():
+    import sys
+    print(f"✅ Inside API: Flask is using Python: {sys.executable}")
+
+    try:
+        import sklearn
+        print(f"✅ scikit-learn is installed: {sklearn.__version__}")
+    except ImportError as e:
+        print(f"❌ ERROR: {e}")
+        return jsonify({"error": "Failed to recommend diet", "details": str(e)}), 500
+
     user_email = get_jwt_identity()
 
     try:
