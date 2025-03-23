@@ -9,7 +9,7 @@ from sklearn.preprocessing import LabelEncoder
 os.environ["LOKY_MAX_CPU_COUNT"] = "4"  # Set this to your actual core count
 
 # Load dataset
-dataset_path = os.path.join(os.getcwd(), "diet_data.csv")  # Ensure this file exists
+dataset_path = os.path.join(os.getcwd(), "diet.csv")  # Ensure this file exists
 if not os.path.exists(dataset_path):
     raise FileNotFoundError(f"❌ Dataset not found at {dataset_path}")
 
