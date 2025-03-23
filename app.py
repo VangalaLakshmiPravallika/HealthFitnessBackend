@@ -13,6 +13,7 @@ from datetime import datetime
 from datetime import datetime, timedelta
 import pyotp
 import smtplib
+import joblib
 
 NEWS_API_KEY = os.getenv("NEWS_API_KEY")  
 NEWS_API_URL = "https://newsapi.org/v2/everything"
@@ -37,6 +38,7 @@ users_collection = db.users
 profiles_collection = db.profiles
 challenges_collection = db.challenges
 user_challenges_collection = db.user_challenges
+notifications_collection = db.notifications
 
 app.config["JWT_SECRET_KEY"]=os.getenv("JWT_SECRET_KEY")
 jwt = JWTManager(app)
@@ -64,6 +66,73 @@ if challenges_collection.count_documents({}) == 0:
 @app.route("/",methods=["GET"])
 def home():
     return jsonify({"message": "Flask API is running!"})
+
+@app.route("/api/recommend-diet", methods=["GET"])
+@jwt_required()
+def recommend_diet():
+    user_email = get_jwt_identity()
+
+    try:
+        # Fetch user's stored BMI
+        user = profiles_collection.find_one({"email": user_email}, {"_id": 0, "bmi": 1})
+        if not user or "bmi" not in user:
+            return jsonify({"error": "BMI not found. Please update your profile."}), 400
+
+        bmi = user["bmi"]
+
+        # Fetch user's meal log & calculate nutrition summary
+        meals = list(meal_collection.find({"user": user_email}, {"_id": 0}))
+        if not meals:
+            return jsonify({"message": "No meal data available"}), 400
+
+        total_nutrition = {
+            "calories": sum(meal.get("nutrition", {}).get("calories", 0) for meal in meals),
+            "protein": sum(meal.get("nutrition", {}).get("protein", 0) for meal in meals),
+            "carbs": sum(meal.get("nutrition", {}).get("carbs", 0) for meal in meals),
+            "fats": sum(meal.get("nutrition", {}).get("fats", 0) for meal in meals),
+        }
+
+        # Load trained K-Means model
+        kmeans_model = joblib.load("diet_kmeans.pkl")
+
+        # Predict Cluster (Using BMI & default values for meal frequency)
+        cluster = kmeans_model.predict([[bmi, 3, 4, 2, 2]])[0]  
+
+        # Define diet plans per cluster
+        diet_plans = {
+            0: {
+                "goal": "Weight Gain",
+                "breakfast": "Avocado Toast & Eggs",
+                "lunch": "Chicken & Quinoa",
+                "dinner": "Salmon & Brown Rice",
+                "snacks": "Greek Yogurt with Nuts"
+            },
+            1: {
+                "goal": "Maintenance",
+                "breakfast": "Oats & Banana",
+                "lunch": "Grilled Chicken Salad",
+                "dinner": "Stir-fry Tofu with Rice",
+                "snacks": "Hummus with Carrots"
+            },
+            2: {
+                "goal": "Weight Loss",
+                "breakfast": "Scrambled Eggs with Spinach",
+                "lunch": "Grilled Fish & Veggies",
+                "dinner": "Vegetable Soup",
+                "snacks": "Almond Butter & Apple"
+            }
+        }
+
+        recommended_diet = diet_plans[cluster]
+
+        return jsonify({
+            "bmi": bmi,
+            "overall_nutrition": total_nutrition,
+            "recommended_diet": recommended_diet
+        }), 200
+
+    except Exception as e:
+        return jsonify({"error": "Failed to recommend diet", "details": str(e)}), 500
 
 @app.route('/generate-otp', methods=['POST'])
 def generate_otp():
@@ -211,24 +280,45 @@ def update_challenge_progress():
     if not challenge_name or progress is None:
         return jsonify({"error": "Challenge name and progress are required"}), 400
 
+    # Fetch the challenge details
     challenge = challenges_collection.find_one({"name": challenge_name})
     if not challenge:
         return jsonify({"error": "Challenge not found"}), 404
 
+    # Fetch the user's progress for the challenge
     user_progress = user_challenges_collection.find_one({"email": user_email, "challenge_name": challenge_name})
-
     if not user_progress:
         return jsonify({"error": "You have not joined this challenge"}), 403
 
+    # Update the user's progress
     new_progress = user_progress["progress"] + progress
-    is_completed = new_progress >= challenge["target"]  
+    is_completed = new_progress >= challenge["target"]
+
     user_challenges_collection.update_one(
         {"email": user_email, "challenge_name": challenge_name},
         {"$set": {"progress": new_progress, "completed": is_completed}}
     )
 
+    # Award a badge if the challenge is completed
     if is_completed:
-        return jsonify({"message": f"Congratulations! You completed '{challenge_name}' 🎉"}), 200
+        # Define the badge details
+        badge_title = f"🏆 {challenge_name} Champion"
+        badge_description = f"Congratulations! You completed the '{challenge_name}' challenge and earned the {badge_title} badge!"
+
+        # Insert the badge into the achievements collection
+        achievements_collection.insert_one({
+            "user": user_email,
+            "title": badge_title,
+            "description": badge_description,
+            "likes": 0,
+            "comments": [],
+            "date": datetime.utcnow().strftime("%Y-%m-%d")
+        })
+
+        return jsonify({
+            "message": f"Congratulations! You completed '{challenge_name}' 🎉",
+            "badge": badge_title
+        }), 200
 
     return jsonify({"message": "Progress updated successfully!", "new_progress": new_progress}), 200
 
@@ -391,24 +481,18 @@ def get_profile():
     
     return jsonify(profile), 200
 
-@app.route("/api/get-bmi", methods=["POST"])
+@app.route("/api/get-bmi", methods=["GET"])
 @jwt_required()
 def get_bmi():
-    data = request.json
-    height = data.get("height")
-    weight = data.get("weight")
+    user_email = get_jwt_identity()
 
-    if not height or not weight:
-        return jsonify({"error": "Height and weight are required"}), 400
-    
-    try:
-        height = float(height)
-        weight = float(weight)
-    except ValueError:
-        return jsonify({"error": "Invalid input"}), 400
+    # Fetch user profile from MongoDB
+    user = profiles_collection.find_one({"email": user_email}, {"_id": 0, "bmi": 1})
 
-    bmi = calculate_bmi(weight, height)
-    return jsonify({"bmi": bmi}), 200
+    if not user or "bmi" not in user:
+        return jsonify({"error": "BMI not found. Please update your profile."}), 400
+
+    return jsonify({"bmi": user["bmi"]}), 200
 
 @app.route("/api/register",methods=["POST"])
 def register():
@@ -719,25 +803,6 @@ def like_achievement():
         return jsonify({"message":"Achievement liked!"}),200
     return jsonify({"error": "Achievement not found"}),404
 
-@app.route("/api/get-notifications", methods=["GET"])
-@jwt_required()
-def get_notifications():
-    user_email = get_jwt_identity()
-
-    notifications = list(
-        db.notifications.find(
-            {"user": user_email}, 
-            {"_id": 0}  
-        ).sort("timestamp", -1) 
-    )
-
-    db.notifications.update_many(
-        {"user": user_email, "seen": False}, 
-        {"$set": {"seen": True}}
-    )
-
-    return jsonify({"notifications": notifications}), 200
-
 
 
 @app.route("/api/join-group", methods=["POST"])
@@ -909,7 +974,7 @@ def like_post():
     )
 
     if result.modified_count > 0:
-        db.notifications.insert_one({
+        notifications_collection.insert_one({
             "user": post_owner,
             "message": f"{user_email} liked your post!",
             "timestamp": datetime.utcnow().isoformat(),
@@ -942,7 +1007,7 @@ def comment_post():
     )
 
     if result.modified_count > 0:
-        db.notifications.insert_one({
+        notifications_collection.insert_one({
             "user": post_owner,
             "message": f"{user_email} commented on your post: {comment_text}",
             "timestamp": datetime.utcnow().isoformat(),
@@ -952,6 +1017,12 @@ def comment_post():
 
     return jsonify({"error": "Failed to add comment"}), 500
 
+@app.route("/api/notifications", methods=["GET"])
+@jwt_required()
+def get_notifications():
+    user_email = get_jwt_identity()
+    notifications = list(notifications_collection.find({"user": user_email}, {"_id": 0}))
+    return jsonify(notifications), 200
 
 
 @app.route("/api/get-group-posts/<group_name>", methods=["GET"])
