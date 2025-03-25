@@ -10,6 +10,6 @@ requests
 Flask-SQLAlchemy
 pyotp
 joblib
-scikit-learn==1.2.2
-pandas==2.0.2
-numpy==1.24.3
+scikit-learn
+pandas
+numpy
