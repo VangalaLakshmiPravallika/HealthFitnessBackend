@@ -11,3 +11,4 @@ requests
 Flask-SQLAlchemy
 pyotp
 joblib
+pandas
