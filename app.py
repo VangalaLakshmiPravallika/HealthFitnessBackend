@@ -76,6 +76,23 @@ def get_intensity_level(bmi):
     elif 25 <= bmi < 30: return 'advanced'
     else: return 'low-impact'
 
+@app.route("/api/get-recommendations", methods=["GET"])
+@jwt_required()
+def get_recommendations():
+    """Endpoint for general workout recommendations"""
+    try:
+        # Get random sample of exercises (6 beginner/intermediate level)
+        general_recommendations = exercises_df[
+            exercises_df['equipment'].isin(['body weight', 'dumbbells', 'resistance band'])
+        ].sample(n=6)
+        
+        return jsonify({
+            "recommended_workouts": general_recommendations.to_dict('records')
+        }), 200
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.route("/api/get-personalized-workouts", methods=["GET"])
 @jwt_required()
 def get_personalized_workouts():
