@@ -15,6 +15,8 @@ import pyotp
 import smtplib
 import joblib
 import sys
+import pandas as pd
+import numpy as np
 print("✅ Flask is using Python:", sys.executable)
 
 try:
@@ -27,7 +29,6 @@ NEWS_API_KEY = os.getenv("NEWS_API_KEY")
 NEWS_API_URL = "https://newsapi.org/v2/everything"
 
 load_dotenv()
-df = pd.read_csv('fitness_exercises.csv')
 
 app=Flask(__name__)
 CORS(app)
@@ -53,6 +54,77 @@ app.config["JWT_SECRET_KEY"]=os.getenv("JWT_SECRET_KEY")
 jwt = JWTManager(app)
 
 MODEL_PATH = os.path.join(os.getcwd(), "diet_kmeans.pkl")
+
+import pandas as pd
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+from flask import jsonify
+from pymongo import MongoClient
+
+exercises_df = pd.read_csv('fitness_exercises.csv')  
+
+exercises_df['tags'] = exercises_df['bodyPart'] + ' ' + exercises_df['equipment'] + ' ' + exercises_df['target']
+
+tfidf = TfidfVectorizer(stop_words='english')
+tfidf_matrix = tfidf.fit_transform(exercises_df['tags'])
+
+cosine_sim = cosine_similarity(tfidf_matrix, tfidf_matrix)
+
+def get_intensity_level(bmi):
+    if bmi < 18.5: return 'beginner'
+    elif 18.5 <= bmi < 25: return 'intermediate'
+    elif 25 <= bmi < 30: return 'advanced'
+    else: return 'low-impact'
+
+@app.route("/api/get-personalized-workouts", methods=["GET"])
+@jwt_required()
+def get_personalized_workouts():
+    user_email = get_jwt_identity()
+    
+    user = profiles_collection.find_one({"email": user_email})
+    if not user or "bmi" not in user:
+        return jsonify({"error": "BMI not found. Please update your profile."}), 400
+    
+    bmi = user["bmi"]
+    intensity = get_intensity_level(bmi)
+    
+    preferred_body_part = user.get("preferred_body_part", "all")
+    equipment_available = user.get("equipment", ["body weight"])
+    
+    filtered_exercises = exercises_df.copy()
+    
+    if intensity == 'beginner':
+        filtered_exercises = filtered_exercises[~filtered_exercises['name'].str.contains('advanced|pro', case=False)]
+    elif intensity == 'low-impact':
+        filtered_exercises = filtered_exercises[filtered_exercises['equipment'].str.contains('body weight|resistance band', case=False)]
+    
+    if preferred_body_part != "all":
+        filtered_exercises = filtered_exercises[filtered_exercises['bodyPart'] == preferred_body_part]
+    
+    filtered_exercises = filtered_exercises[filtered_exercises['equipment'].isin(equipment_available)]
+    
+    if 'workout_history' in user:
+        history = pd.DataFrame(user['workout_history'])
+        top_exercises = history['exerciseId'].value_counts().head(3).index.tolist()
+        
+        similar_exercises = set()
+        for ex_id in top_exercises:
+            idx = exercises_df[exercises_df['id'] == ex_id].index[0]
+            sim_scores = list(enumerate(cosine_sim[idx]))
+            sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)
+            similar_exercises.update([i[0] for i in sim_scores[1:4]])
+        
+        recommended_indices = list(similar_exercises)
+    else:
+        recommended_indices = filtered_exercises.sample(min(6, len(filtered_exercises))).index.tolist()
+    
+    recommendations = exercises_df.iloc[recommended_indices].to_dict('records')
+    
+    return jsonify({
+        "bmi": bmi,
+        "intensity_level": intensity,
+        "recommended_workouts": recommendations
+    })
 
 kmeans = None
 try:
@@ -256,21 +328,18 @@ def get_challenges():
 @app.route("/api/news", methods=["GET"])
 def get_news():
     try:
-        # Define the query for health, fitness, and diet-related news
         query = "health fitness diet"
         params = {
             "q": query,
             "sortBy": "publishedAt",
-            "pageSize": 10,  # Number of articles to fetch
+            "pageSize": 10,  
             "apiKey": NEWS_API_KEY,
         }
 
-        # Fetch news from NewsAPI
         response = requests.get(NEWS_API_URL, params=params)
-        response.raise_for_status()  # Raise an error for bad responses (4xx or 5xx)
+        response.raise_for_status()  
         news_data = response.json()
 
-        # Extract relevant fields from the response
         articles = news_data.get("articles", [])
         news = [
             {
@@ -285,7 +354,6 @@ def get_news():
 
         return jsonify(news)
     except requests.exceptions.RequestException as e:
-        # Handle errors (e.g., network issues, invalid API key)
         return jsonify({"error": str(e)}), 500
 
 @app.route("/api/join-challenge", methods=["POST"])
@@ -329,17 +397,14 @@ def update_challenge_progress():
     if not challenge_name or progress is None:
         return jsonify({"error": "Challenge name and progress are required"}), 400
 
-    # Fetch the challenge details
     challenge = challenges_collection.find_one({"name": challenge_name})
     if not challenge:
         return jsonify({"error": "Challenge not found"}), 404
 
-    # Fetch the user's progress for the challenge
     user_progress = user_challenges_collection.find_one({"email": user_email, "challenge_name": challenge_name})
     if not user_progress:
         return jsonify({"error": "You have not joined this challenge"}), 403
 
-    # Update the user's progress
     new_progress = user_progress["progress"] + progress
     is_completed = new_progress >= challenge["target"]
 
@@ -348,13 +413,10 @@ def update_challenge_progress():
         {"$set": {"progress": new_progress, "completed": is_completed}}
     )
 
-    # Award a badge if the challenge is completed
     if is_completed:
-        # Define the badge details
         badge_title = f"🏆 {challenge_name} Champion"
         badge_description = f"Congratulations! You completed the '{challenge_name}' challenge and earned the {badge_title} badge!"
 
-        # Insert the badge into the achievements collection
         achievements_collection.insert_one({
             "user": user_email,
             "title": badge_title,
@@ -535,7 +597,6 @@ def get_profile():
 def get_bmi():
     user_email = get_jwt_identity()
 
-    # Fetch user profile from MongoDB
     user = profiles_collection.find_one({"email": user_email}, {"_id": 0, "bmi": 1})
 
     if not user or "bmi" not in user:
