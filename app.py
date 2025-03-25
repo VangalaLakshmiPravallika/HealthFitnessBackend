@@ -27,6 +27,7 @@ NEWS_API_KEY = os.getenv("NEWS_API_KEY")
 NEWS_API_URL = "https://newsapi.org/v2/everything"
 
 load_dotenv()
+df = pd.read_csv('fitness_exercises.csv')
 
 app=Flask(__name__)
 CORS(app)
