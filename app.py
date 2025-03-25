@@ -79,9 +79,7 @@ def get_intensity_level(bmi):
 @app.route("/api/get-recommendations", methods=["GET"])
 @jwt_required()
 def get_recommendations():
-    """Endpoint for general workout recommendations"""
     try:
-        # Get random sample of exercises (6 beginner/intermediate level)
         general_recommendations = exercises_df[
             exercises_df['equipment'].isin(['body weight', 'dumbbells', 'resistance band'])
         ].sample(n=6)
