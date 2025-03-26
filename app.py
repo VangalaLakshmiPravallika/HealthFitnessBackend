@@ -181,29 +181,68 @@ def get_personalized_workouts():
             "success": False,
             "error": str(e)
         }), 500
+
+def load_food_data():
+    try:
+        file_path = os.path.join(os.getcwd(), "food_database.xlsx")
+        print(f"📂 Checking file at: {file_path}")  
+        if not os.path.exists(file_path):
+            print("❌ File not found!")
+            return {}
+
+        df = pd.read_excel(file_path, engine="openpyxl")
+        print("✅ First 5 rows of DataFrame:")
+        print(df.head())  
+        required_columns = ["Food Name", "Calories (kcal)", "Protein (g)", "Carbohydrates (g)", "Fats (g)"]
+        for col in required_columns:
+            if col not in df.columns:
+                print(f"❌ Column '{col}' not found in Excel!")
+                return {}
+
+        
+        df = df.fillna(0)
+        numeric_columns = ["Calories (kcal)", "Protein (g)", "Carbohydrates (g)", "Fats (g)"]
+        df[numeric_columns] = df[numeric_columns].apply(pd.to_numeric, errors="coerce").fillna(0)
+
+       
+        food_dict = df.set_index("Food Name")[numeric_columns].to_dict(orient="index")
+
+        print(f"✅ Loaded Food Items: {list(food_dict.keys())}") 
+        return food_dict
+
+    except Exception as e:
+        print(f"⚠ Error loading food database: {e}")
+        return {}
+
+food_database = load_food_data()
     
 
 def initialize_model():
-    if not food_database:
-        return None
+    try:
+        if not food_database:
+            print("⚠ Food database not loaded - cannot initialize model")
+            return None, None
+        
+        # Convert food database to DataFrame for modeling
+        foods = []
+        for name, nutrients in food_database.items():
+            foods.append({
+                'name': name,
+                'calories': nutrients['Calories (kcal)'],
+                'protein': nutrients['Protein (g)'],
+                'carbs': nutrients['Carbohydrates (g)'],
+                'fat': nutrients['Fats (g)']
+            })
+        
+        food_df = pd.DataFrame(foods)
+        features = food_df[['calories', 'protein', 'carbs', 'fat']]
+        model = NearestNeighbors(n_neighbors=5, algorithm='ball_tree')
+        model.fit(features)
+        return model, food_df
+    except Exception as e:
+        print(f"⚠ Error initializing model: {e}")
+        return None, None
     
-    # Convert food database to DataFrame for modeling
-    foods = []
-    for name, nutrients in food_database.items():
-        foods.append({
-            'name': name,
-            'calories': nutrients['Calories (kcal)'],
-            'protein': nutrients['Protein (g)'],
-            'carbs': nutrients['Carbohydrates (g)'],
-            'fat': nutrients['Fats (g)']
-        })
-    
-    df = pd.DataFrame(foods)
-    features = df[['calories', 'protein', 'carbs', 'fat']]
-    model = NearestNeighbors(n_neighbors=5, algorithm='ball_tree')
-    model.fit(features)
-    return model, df
-
 food_model, food_df = initialize_model()
 
 def calculate_calorie_needs(bmi, weight_kg, activity_level):
@@ -1364,39 +1403,6 @@ def remove_comment():
 
 logging.basicConfig(level=logging.DEBUG)
 
-def load_food_data():
-    try:
-        file_path = os.path.join(os.getcwd(), "food_database.xlsx")
-        print(f"📂 Checking file at: {file_path}")  
-        if not os.path.exists(file_path):
-            print("❌ File not found!")
-            return {}
-
-        df = pd.read_excel(file_path, engine="openpyxl")
-        print("✅ First 5 rows of DataFrame:")
-        print(df.head())  
-        required_columns = ["Food Name", "Calories (kcal)", "Protein (g)", "Carbohydrates (g)", "Fats (g)"]
-        for col in required_columns:
-            if col not in df.columns:
-                print(f"❌ Column '{col}' not found in Excel!")
-                return {}
-
-        
-        df = df.fillna(0)
-        numeric_columns = ["Calories (kcal)", "Protein (g)", "Carbohydrates (g)", "Fats (g)"]
-        df[numeric_columns] = df[numeric_columns].apply(pd.to_numeric, errors="coerce").fillna(0)
-
-       
-        food_dict = df.set_index("Food Name")[numeric_columns].to_dict(orient="index")
-
-        print(f"✅ Loaded Food Items: {list(food_dict.keys())}") 
-        return food_dict
-
-    except Exception as e:
-        print(f"⚠ Error loading food database: {e}")
-        return {}
-
-food_database = load_food_data()
 from datetime import datetime
 
 @app.route("/api/log-meal", methods=["POST"])
