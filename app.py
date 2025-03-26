@@ -20,6 +20,7 @@ import numpy as np
 from sklearn.neighbors import NearestNeighbors
 import random
 from flask_mail import Mail, Message
+from werkzeug.security import generate_password_hash
 
 
 print("✅ Flask is using Python:", sys.executable)
@@ -39,17 +40,14 @@ app=Flask(__name__)
 CORS(app)
 
 app.config['MAIL_SERVER'] = 'smtp.gmail.com'
-app.config["MAIL_PORT"] = 587
-app.config["MAIL_USERNAME"] = 'pravalliva11@gmail.com'
-app.config["MAIL_PASSWORD"] = 'pralak@1'
-#app.config["MAIL_USE_TLS"] = True
-app.config["MAIL_USE_TLS"] = True
-app.config["MAIL_USE_SSL"] = False
-#app.config["MAIL_USE_SSL"] = True
+app.config['MAIL_PORT'] = 587
+app.config['MAIL_USE_TLS'] = True
+app.config['MAIL_USERNAME'] = 'pravalliva11@gmail.com'
+app.config['MAIL_PASSWORD'] = 'pralak@1'
 app.config['MAIL_DEFAULT_SENDER'] = 'pravalliva11@gmail.com'
 
-
 mail = Mail(app)
+OTP_EXPIRY_MINUTES = 10
 
 
 MONGO_URI=os.getenv("MONGO_URI")
@@ -523,102 +521,117 @@ def recommend_diet():
         print(f"❌ ERROR: {str(e)}")
         return jsonify({"error": "Failed to recommend diet", "details": str(e)}), 500
     
-# 🟢 **Step 1: Request OTP**
+otp_store = {}
+
 @app.route('/forgot-password', methods=['POST'])
 def forgot_password():
-    data = request.json
-    email = data.get('email')
-
-    if not email:
-        return jsonify({'error': 'Email is required'}), 400
-
-    user = users_collection.find_one({'email': email})
-    if not user:
-        return jsonify({'error': 'User not found'}), 404
-
-    # Generate 6-digit OTP
-    otp = str(random.randint(100000, 999999))
-    expiry_time = datetime.utcnow() + timedelta(minutes=OTP_EXPIRY_MINUTES)
-
-    # Store OTP temporarily
-    otp_store[email] = {'otp': otp, 'expiry': expiry_time}
-
-    msg = Message(subject="Password Reset OTP",
-                  sender=app.config["MAIL_DEFAULT_SENDER"],
-                  recipients=[email],
-                  body=f"Your OTP for password reset is: {otp}. It is valid for {OTP_EXPIRY_MINUTES} minutes.")
-
     try:
-        with app.app_context():
-            mail.send(msg)
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'No JSON data received'}), 400
+
+        email = data.get('email')
+        if not email:
+            return jsonify({'error': 'Email is required'}), 400
+
+        user = users_collection.find_one({'email': email})
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+
+        # Generate 6-digit OTP
+        otp = str(random.randint(100000, 999999))
+        expiry_time = datetime.utcnow() + timedelta(minutes=OTP_EXPIRY_MINUTES)
+
+        # Store OTP temporarily
+        otp_store[email] = {
+            'otp': otp,
+            'expiry': expiry_time,
+            'verified': False
+        }
+
+        # Send email
+        msg = Message(
+            subject="Password Reset OTP",
+            recipients=[email],
+            body=f"Your OTP for password reset is: {otp}. It is valid for {OTP_EXPIRY_MINUTES} minutes."
+        )
+
+        mail.send(msg)
         return jsonify({'message': 'OTP sent to email'}), 200
+
     except Exception as e:
-        return jsonify({'error': f"Email sending failed: {str(e)}"}), 500
-
-@app.route('/generate-otp', methods=['POST'])
-def generate_otp():
-    data = request.json
-    email = data.get('email')
-
-    # Check if the user exists
-    user = users_collection.find_one({'email': email})
-    if not user:
-        return jsonify({'error': 'User not found'}), 404
-
-    # Generate OTP
-    totp = pyotp.TOTP(pyotp.random_base32())
-    otp = totp.now()
-
-    # Store OTP in the user document
-    users_collection.update_one(
-        {'email': email},
-        {'$set': {'otp': otp}}
-    )
-
-    try:
-        server = smtplib.SMTP('smtp.gmail.com', 587)
-        server.starttls()
-        server.login('your_email@gmail.com', 'your_password')
-        server.sendmail('your_email@gmail.com', email, f'Your OTP is: {otp}')
-        server.quit()
-    except Exception as e:
-        return jsonify({'error': 'Failed to send OTP'}), 500
-
-    return jsonify({'message': 'OTP sent successfully'}), 200
+        return jsonify({'error': f"Error sending OTP: {str(e)}"}), 500
 
 @app.route('/verify-otp', methods=['POST'])
 def verify_otp():
-    data = request.json
-    email = data.get('email')
-    otp = data.get('otp')
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'No JSON data received'}), 400
 
-    user = users_collection.find_one({'email': email})
-    if not user:
-        return jsonify({'error': 'User not found'}), 404
+        email = data.get('email')
+        otp = data.get('otp')
 
-    
-    if user.get('otp') == otp:
-        users_collection.update_one(
-            {'email': email},
-            {'$unset': {'otp': ''}}
-        )
+        if not email or not otp:
+            return jsonify({'error': 'Email and OTP are required'}), 400
+
+        # Check OTP store
+        stored_data = otp_store.get(email)
+        if not stored_data:
+            return jsonify({'error': 'OTP not found or expired'}), 404
+
+        if datetime.utcnow() > stored_data['expiry']:
+            del otp_store[email]
+            return jsonify({'error': 'OTP expired'}), 400
+
+        if stored_data['otp'] != otp:
+            return jsonify({'error': 'Invalid OTP'}), 400
+
+        # Mark as verified
+        otp_store[email]['verified'] = True
         return jsonify({'message': 'OTP verified successfully'}), 200
-    else:
-        return jsonify({'error': 'Invalid OTP'}), 400
-    
+
+    except Exception as e:
+        return jsonify({'error': f"Error verifying OTP: {str(e)}"}), 500
+
 @app.route('/reset-password', methods=['POST'])
 def reset_password():
-    data = request.json
-    email = data.get('email')
-    new_password = data.get('new_password')
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'No JSON data received'}), 400
 
-    users_collection.update_one(
-        {'email': email},
-        {'$set': {'password': new_password}}  
-    )
+        email = data.get('email')
+        new_password = data.get('new_password')
 
-    return jsonify({'message': 'Password reset successfully'}), 200
+        if not email or not new_password:
+            return jsonify({'error': 'Email and new password are required'}), 400
 
+        # Check if OTP was verified
+        stored_data = otp_store.get(email)
+        if not stored_data or not stored_data.get('verified'):
+            return jsonify({'error': 'OTP not verified'}), 400
+
+        # Hash the new password
+        hashed_password = generate_password_hash(new_password)
+
+        # Update password in database
+        result = users_collection.update_one(
+            {'email': email},
+            {'$set': {'password': hashed_password}}
+        )
+
+        if result.modified_count == 0:
+            return jsonify({'error': 'Password update failed'}), 400
+
+        # Clean up OTP store
+        del otp_store[email]
+
+        return jsonify({'message': 'Password reset successfully'}), 200
+
+    except Exception as e:
+        return jsonify({'error': f"Error resetting password: {str(e)}"}), 500
+    
 @app.route("/api/get-challenges", methods=["GET"])
 @jwt_required()
 def get_challenges():
