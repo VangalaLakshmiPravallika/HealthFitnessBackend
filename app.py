@@ -17,6 +17,9 @@ import joblib
 import sys
 import pandas as pd
 import numpy as np
+from sklearn.neighbors import NearestNeighbors
+import random
+
 print("✅ Flask is using Python:", sys.executable)
 
 try:
@@ -76,70 +79,215 @@ def get_intensity_level(bmi):
     elif 25 <= bmi < 30: return 'advanced'
     else: return 'low-impact'
 
+def format_gif_url(exercise_id):
+    try:
+        exercise_id = str(int(exercise_id)).zfill(4)  # Ensure 4-digit format
+        return f"https://d205bpvrqc9yn1.cloudfront.net/{exercise_id}.gif"
+    except:
+        return None
+
 @app.route("/api/get-recommendations", methods=["GET"])
 @jwt_required()
 def get_recommendations():
+    """General workout recommendations for all users"""
     try:
-        general_recommendations = exercises_df[
-            exercises_df['equipment'].isin(['body weight', 'dumbbells', 'resistance band'])
-        ].sample(n=6)
+        if exercises_df.empty:
+            raise Exception("Exercise data not loaded")
+            
+        # Get 6 random exercises
+        general_recs = exercises_df.sample(n=6).copy()
+        general_recs['gifUrl'] = general_recs['id'].apply(format_gif_url)
         
         return jsonify({
-            "recommended_workouts": general_recommendations.to_dict('records')
+            "success": True,
+            "recommended_workouts": general_recs.replace({pd.NA: None}).to_dict('records')
         }), 200
         
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
 
 @app.route("/api/get-personalized-workouts", methods=["GET"])
 @jwt_required()
 def get_personalized_workouts():
-    user_email = get_jwt_identity()
-    
-    user = profiles_collection.find_one({"email": user_email})
-    if not user or "bmi" not in user:
-        return jsonify({"error": "BMI not found. Please update your profile."}), 400
-    
-    bmi = user["bmi"]
-    intensity = get_intensity_level(bmi)
-    
-    preferred_body_part = user.get("preferred_body_part", "all")
-    equipment_available = user.get("equipment", ["body weight"])
-    
-    filtered_exercises = exercises_df.copy()
-    
-    if intensity == 'beginner':
-        filtered_exercises = filtered_exercises[~filtered_exercises['name'].str.contains('advanced|pro', case=False)]
-    elif intensity == 'low-impact':
-        filtered_exercises = filtered_exercises[filtered_exercises['equipment'].str.contains('body weight|resistance band', case=False)]
-    
-    if preferred_body_part != "all":
-        filtered_exercises = filtered_exercises[filtered_exercises['bodyPart'] == preferred_body_part]
-    
-    filtered_exercises = filtered_exercises[filtered_exercises['equipment'].isin(equipment_available)]
-    
-    if 'workout_history' in user:
-        history = pd.DataFrame(user['workout_history'])
-        top_exercises = history['exerciseId'].value_counts().head(3).index.tolist()
+    """Personalized recommendations based on user profile"""
+    try:
+        if exercises_df.empty or cosine_sim is None:
+            raise Exception("Exercise data not loaded")
+            
+        user_email = get_jwt_identity()
+        user = profiles_collection.find_one({"email": user_email})
         
-        similar_exercises = set()
-        for ex_id in top_exercises:
-            idx = exercises_df[exercises_df['id'] == ex_id].index[0]
-            sim_scores = list(enumerate(cosine_sim[idx]))
-            sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)
-            similar_exercises.update([i[0] for i in sim_scores[1:4]])
+        if not user or "bmi" not in user:
+            return jsonify({
+                "success": False,
+                "error": "BMI not found. Please update your profile."
+            }), 400
         
-        recommended_indices = list(similar_exercises)
+        bmi = user["bmi"]
+        intensity = get_intensity_level(bmi)
+        preferred_body_part = user.get("preferred_body_part", "all")
+        equipment_available = user.get("equipment", ["body weight"])
+        
+        # Filter exercises
+        filtered_exercises = exercises_df.copy()
+        
+        # Intensity filtering
+        if intensity == 'beginner':
+            filtered_exercises = filtered_exercises[~filtered_exercises['name'].str.contains('advanced|pro', case=False)]
+        elif intensity == 'low-impact':
+            filtered_exercises = filtered_exercises[filtered_exercises['equipment'].str.contains('body weight|resistance band', case=False)]
+        
+        # Preference filtering
+        if preferred_body_part != "all":
+            filtered_exercises = filtered_exercises[filtered_exercises['bodyPart'] == preferred_body_part]
+        
+        # Equipment filtering
+        filtered_exercises = filtered_exercises[filtered_exercises['equipment'].isin(equipment_available)]
+        
+        # Recommendation logic
+        if 'workout_history' in user:
+            try:
+                history = pd.DataFrame(user['workout_history'])
+                top_exercises = history['exerciseId'].value_counts().head(3).index.tolist()
+                
+                similar_exercises = set()
+                for ex_id in top_exercises:
+                    idx = exercises_df[exercises_df['id'] == ex_id].index[0]
+                    sim_scores = list(enumerate(cosine_sim[idx]))
+                    sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)
+                    similar_exercises.update([i[0] for i in sim_scores[1:4]])
+                
+                recommended_indices = list(similar_exercises)
+            except:
+                recommended_indices = filtered_exercises.sample(min(6, len(filtered_exercises))).index.tolist()
+        else:
+            recommended_indices = filtered_exercises.sample(min(6, len(filtered_exercises))).index.tolist()
+        
+        recommendations = exercises_df.iloc[recommended_indices].copy()
+        recommendations['gifUrl'] = recommendations['id'].apply(format_gif_url)
+        
+        return jsonify({
+            "success": True,
+            "bmi": bmi,
+            "intensity_level": intensity,
+            "recommended_workouts": recommendations.replace({pd.NA: None}).to_dict('records')
+        }), 200
+        
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+    
+
+def initialize_model():
+    if not food_database:
+        return None
+    
+    # Convert food database to DataFrame for modeling
+    foods = []
+    for name, nutrients in food_database.items():
+        foods.append({
+            'name': name,
+            'calories': nutrients['Calories (kcal)'],
+            'protein': nutrients['Protein (g)'],
+            'carbs': nutrients['Carbohydrates (g)'],
+            'fat': nutrients['Fats (g)']
+        })
+    
+    df = pd.DataFrame(foods)
+    features = df[['calories', 'protein', 'carbs', 'fat']]
+    model = NearestNeighbors(n_neighbors=5, algorithm='ball_tree')
+    model.fit(features)
+    return model, df
+
+food_model, food_df = initialize_model()
+
+def calculate_calorie_needs(bmi, weight_kg, activity_level):
+    # Harris-Benedict formula (simplified)
+    base_calories = weight_kg * 22  # Rough estimate
+    activity_multiplier = {
+        'sedentary': 1.2,
+        'light': 1.375,
+        'moderate': 1.55,
+        'active': 1.725,
+        'very_active': 1.9
+    }.get(activity_level, 1.2)
+    
+    # Adjust based on BMI goals
+    if bmi < 18.5:
+        return base_calories * activity_multiplier * 1.1  # Gain weight
+    elif bmi > 25:
+        return base_calories * activity_multiplier * 0.9  # Lose weight
     else:
-        recommended_indices = filtered_exercises.sample(min(6, len(filtered_exercises))).index.tolist()
+        return base_calories * activity_multiplier  # Maintain
+
+def generate_meal_plan(user_id):
+    user = users_collection.find_one({"user_id": user_id})
+    if not user:
+        return None
     
-    recommendations = exercises_df.iloc[recommended_indices].to_dict('records')
+    daily_calories = user['daily_calories']
+    bmi = user['bmi']
     
-    return jsonify({
-        "bmi": bmi,
-        "intensity_level": intensity,
-        "recommended_workouts": recommendations
-    })
+    # Macronutrient distribution based on BMI
+    if bmi < 18.5:
+        macros = {'protein': 0.25, 'carbs': 0.50, 'fat': 0.25}
+    elif bmi > 25:
+        macros = {'protein': 0.35, 'carbs': 0.40, 'fat': 0.25}
+    else:
+        macros = {'protein': 0.30, 'carbs': 0.45, 'fat': 0.25}
+    
+    # Generate meals
+    meals = {
+        'breakfast': generate_meal(daily_calories * 0.25, macros),
+        'lunch': generate_meal(daily_calories * 0.35, macros),
+        'dinner': generate_meal(daily_calories * 0.30, macros),
+        'snacks': [
+            generate_meal(daily_calories * 0.05, macros),
+            generate_meal(daily_calories * 0.05, macros)
+        ]
+    }
+    
+    return meals
+
+def generate_meal(calories, macros):
+    if not food_model or food_df.empty:
+        return {"error": "Food database not initialized"}
+    
+    target_protein = calories * macros['protein'] / 4
+    target_carbs = calories * macros['carbs'] / 4
+    target_fat = calories * macros['fat'] / 9
+    
+    target_vector = [calories, target_protein, target_carbs, target_fat]
+    distances, indices = food_model.kneighbors([target_vector])
+    
+    # Select random combination from nearest neighbors
+    selected_indices = random.sample(list(indices[0]), min(3, len(indices[0])))
+    meal = food_df.iloc[selected_indices].to_dict('records')
+    
+    return {
+        'foods': [{'name': item['name'], 'calories': item['calories']} for item in meal],
+        'total_calories': sum(f['calories'] for f in meal),
+        'total_protein': sum(f['protein'] for f in meal),
+        'total_carbs': sum(f['carbs'] for f in meal),
+        'total_fat': sum(f['fat'] for f in meal)
+    }
+
+@app.route('/api/meal-plan', methods=['GET'])
+@jwt_required()
+def get_meal_plan():
+    user_email = get_jwt_identity()
+    user = users_collection.find_one({"email": user_email})
+    
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+    
+    meal_plan = generate_meal_plan(user['user_id'])
+    return jsonify(meal_plan)
 
 kmeans = None
 try:
