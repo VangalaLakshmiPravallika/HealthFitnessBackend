@@ -264,21 +264,13 @@ def calculate_calorie_needs(bmi, weight_kg, activity_level):
     else:
         return base_calories * activity_multiplier  # Maintain
 
-def generate_meal_plan(user_id):
-    user = users_collection.find_one({"user_id": user_id})
-    if not user:
-        return None
+def generate_meal_plan(bmi, daily_calories):
+    """Generate complete meal plan based on BMI and calories"""
+    if not food_model or food_df.empty:
+        raise ValueError("Food database not initialized")
     
-    daily_calories = user['daily_calories']
-    bmi = user['bmi']
-    
-    # Macronutrient distribution based on BMI
-    if bmi < 18.5:
-        macros = {'protein': 0.25, 'carbs': 0.50, 'fat': 0.25}
-    elif bmi > 25:
-        macros = {'protein': 0.35, 'carbs': 0.40, 'fat': 0.25}
-    else:
-        macros = {'protein': 0.30, 'carbs': 0.45, 'fat': 0.25}
+    # Get macros based on BMI
+    macros = get_macros_by_bmi(bmi)
     
     # Generate meals
     meals = {
@@ -291,42 +283,100 @@ def generate_meal_plan(user_id):
         ]
     }
     
+    # Calculate totals
+    meals['total_calories'] = sum(
+        meal['total_calories'] 
+        for meal in meals.values() 
+        if isinstance(meal, dict)
+    )
+    
     return meals
 
+def get_macros_by_bmi(bmi):
+    """Determine macronutrient ratios based on BMI"""
+    if bmi < 18.5:  # Underweight
+        return {'protein': 0.25, 'carbs': 0.50, 'fat': 0.25}
+    elif bmi > 25:  # Overweight
+        return {'protein': 0.35, 'carbs': 0.40, 'fat': 0.25}
+    else:  # Normal weight
+        return {'protein': 0.30, 'carbs': 0.45, 'fat': 0.25}
+
 def generate_meal(calories, macros):
-    if not food_model or food_df.empty:
-        return {"error": "Food database not initialized"}
-    
-    target_protein = calories * macros['protein'] / 4
-    target_carbs = calories * macros['carbs'] / 4
-    target_fat = calories * macros['fat'] / 9
+    """Generate a single meal that fits the macros"""
+    target_protein = calories * macros['protein'] / 4  # 4 cal/g protein
+    target_carbs = calories * macros['carbs'] / 4      # 4 cal/g carbs
+    target_fat = calories * macros['fat'] / 9          # 9 cal/g fat
     
     target_vector = [calories, target_protein, target_carbs, target_fat]
     distances, indices = food_model.kneighbors([target_vector])
     
-    # Select random combination from nearest neighbors
+    # Select 3 random foods from nearest neighbors
     selected_indices = random.sample(list(indices[0]), min(3, len(indices[0])))
-    meal = food_df.iloc[selected_indices].to_dict('records')
+    meal_foods = food_df.iloc[selected_indices].to_dict('records')
     
     return {
-        'foods': [{'name': item['name'], 'calories': item['calories']} for item in meal],
-        'total_calories': sum(f['calories'] for f in meal),
-        'total_protein': sum(f['protein'] for f in meal),
-        'total_carbs': sum(f['carbs'] for f in meal),
-        'total_fat': sum(f['fat'] for f in meal)
+        'foods': [{
+            'name': food['name'],
+            'calories': food['calories'],
+            'protein': food['protein'],
+            'carbs': food['carbs'],
+            'fat': food['fat']
+        } for food in meal_foods],
+        'total_calories': sum(f['calories'] for f in meal_foods),
+        'total_protein': sum(f['protein'] for f in meal_foods),
+        'total_carbs': sum(f['carbs'] for f in meal_foods),
+        'total_fat': sum(f['fat'] for f in meal_foods)
     }
 
 @app.route('/api/meal-plan', methods=['GET'])
 @jwt_required()
 def get_meal_plan():
-    user_email = get_jwt_identity()
-    user = users_collection.find_one({"email": user_email})
-    
-    if not user:
-        return jsonify({"error": "User not found"}), 404
-    
-    meal_plan = generate_meal_plan(user['user_id'])
-    return jsonify(meal_plan)
+    try:
+        user_email = get_jwt_identity()
+        
+        # Get profile with only needed fields
+        profile = profiles_collection.find_one(
+            {"email": user_email},
+            {"_id": 0, "bmi": 1, "daily_calories": 1, "goals": 1}
+        )
+        
+        if not profile:
+            return jsonify({"error": "Profile not found. Please complete your profile first."}), 404
+            
+        if 'bmi' not in profile or 'daily_calories' not in profile:
+            return jsonify({"error": "Incomplete profile data"}), 400
+            
+        # Adjust calories based on goals
+        daily_calories = adjust_calories_by_goal(
+            profile['daily_calories'],
+            profile.get('goals', 'maintain'),
+            profile['bmi']
+        )
+        
+        # Generate meal plan
+        meal_plan = generate_meal_plan(
+            bmi=profile['bmi'],
+            daily_calories=daily_calories
+        )
+        
+        if not meal_plan:
+            return jsonify({"error": "Failed to generate meal plan"}), 500
+            
+        return jsonify(meal_plan)
+        
+    except Exception as e:
+        return jsonify({
+            "error": "Internal server error",
+            "message": str(e)
+        }), 500
+
+def adjust_calories_by_goal(base_calories, goal, bmi):
+    """Adjust calories based on goal without activity factor"""
+    if goal == "lose_weight" or bmi > 25:
+        return base_calories * 0.9  
+    elif goal == "gain_weight" or bmi < 18.5:
+        return base_calories * 1.1  
+    return base_calories 
 
 kmeans = None
 try:
@@ -706,38 +756,57 @@ def store_profile():
     user_email = get_jwt_identity()
     data = request.json
     
-    name = data.get("name")
-    age = data.get("age")
-    gender = data.get("gender")
-    height = data.get("height")
-    weight = data.get("weight")
-
-    if not all([name, age, gender, height, weight]):
+    # Validate required fields
+    required_fields = ["name", "age", "gender", "height", "weight"]
+    if not all(field in data for field in required_fields):
         return jsonify({"error": "Missing required fields"}), 400
     
     try:
-        age = int(age)
-        height = float(height)
-        weight = float(weight)
-    except ValueError:
-        return jsonify({"error": "Invalid data format"}), 400
+        # Convert and validate data types
+        age = int(data["age"])
+        height = float(data["height"])
+        weight = float(data["weight"])
+        
+        if age <= 0 or height <= 0 or weight <= 0:
+            raise ValueError("Values must be positive")
+    except ValueError as e:
+        return jsonify({"error": f"Invalid data format: {str(e)}"}), 400
 
+    # Calculate derived values
     bmi = calculate_bmi(weight, height)
+    daily_calories = calculate_base_calories(weight, data.get("gender", "male"))
 
     profile_data = {
         "email": user_email,
-        "name": name,
+        "name": data["name"],
         "age": age,
-        "gender": gender,
+        "gender": data["gender"],
         "height": height,
         "weight": weight,
         "bmi": bmi,
-        "created_at": datetime.utcnow(),
+        "daily_calories": daily_calories,
+        "goals": data.get("goals", "maintain"),
+        "updated_at": datetime.utcnow(),
     }
     
-    profiles_collection.update_one({"email": user_email}, {"$set": profile_data}, upsert=True)
+    # Create or update profile
+    result = profiles_collection.update_one(
+        {"email": user_email},
+        {"$set": profile_data},
+        upsert=True
+    )
+    
+    return jsonify({
+        "message": "Profile stored successfully",
+        "bmi": bmi,
+        "daily_calories": daily_calories
+    }), 201
 
-    return jsonify({"message": "Profile stored successfully", "bmi": bmi}), 201
+def calculate_base_calories(weight_kg, gender="male"):
+    """Simplified calorie calculation without activity level"""
+    if gender.lower() == "female":
+        return weight_kg * 22 * 0.9 
+    return weight_kg * 22  
 
 @app.route("/api/edit-profile", methods=["PUT"])
 @jwt_required()
