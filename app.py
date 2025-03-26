@@ -19,6 +19,8 @@ import pandas as pd
 import numpy as np
 from sklearn.neighbors import NearestNeighbors
 import random
+from flask_mail import Mail, Message
+
 
 print("✅ Flask is using Python:", sys.executable)
 
@@ -35,6 +37,20 @@ load_dotenv()
 
 app=Flask(__name__)
 CORS(app)
+
+app.config['MAIL_SERVER'] = 'smtp.gmail.com'
+app.config["MAIL_PORT"] = 587
+app.config["MAIL_USERNAME"] = 'pravalliva11@gmail.com'
+app.config["MAIL_PASSWORD"] = 'pralak@1'
+#app.config["MAIL_USE_TLS"] = True
+app.config["MAIL_USE_TLS"] = True
+app.config["MAIL_USE_SSL"] = False
+#app.config["MAIL_USE_SSL"] = True
+app.config['MAIL_DEFAULT_SENDER'] = 'pravalliva11@gmail.com'
+
+
+mail = Mail(app)
+
 
 MONGO_URI=os.getenv("MONGO_URI")
 client=MongoClient(MONGO_URI)
@@ -506,6 +522,38 @@ def recommend_diet():
     except Exception as e:
         print(f"❌ ERROR: {str(e)}")
         return jsonify({"error": "Failed to recommend diet", "details": str(e)}), 500
+    
+# 🟢 **Step 1: Request OTP**
+@app.route('/forgot-password', methods=['POST'])
+def forgot_password():
+    data = request.json
+    email = data.get('email')
+
+    if not email:
+        return jsonify({'error': 'Email is required'}), 400
+
+    user = users_collection.find_one({'email': email})
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+
+    # Generate 6-digit OTP
+    otp = str(random.randint(100000, 999999))
+    expiry_time = datetime.utcnow() + timedelta(minutes=OTP_EXPIRY_MINUTES)
+
+    # Store OTP temporarily
+    otp_store[email] = {'otp': otp, 'expiry': expiry_time}
+
+    msg = Message(subject="Password Reset OTP",
+                  sender=app.config["MAIL_DEFAULT_SENDER"],
+                  recipients=[email],
+                  body=f"Your OTP for password reset is: {otp}. It is valid for {OTP_EXPIRY_MINUTES} minutes.")
+
+    try:
+        with app.app_context():
+            mail.send(msg)
+        return jsonify({'message': 'OTP sent to email'}), 200
+    except Exception as e:
+        return jsonify({'error': f"Email sending failed: {str(e)}"}), 500
 
 @app.route('/generate-otp', methods=['POST'])
 def generate_otp():
@@ -895,18 +943,33 @@ def login():
     email = data.get("email")
     password = data.get("password")
 
-    user = users_collection.find_one({"email": email})
+    # Validate input
+    if not email or not password:
+        return jsonify({"error": "Email and password are required"}), 400
 
+    # Find user in database
+    user = users_collection.find_one({"email": email})
     if not user:
         return jsonify({"error": "Invalid email or password"}), 401
 
+    # Check password
     stored_password = user["password"]
     if isinstance(stored_password, str):
         stored_password = stored_password.encode('utf-8')
 
-    if not bcrypt.checkpw(password.encode('utf-8'), stored_password):
-        return jsonify({"error": "Invalid email or password"}), 401
+    try:
+        # First try bcrypt.checkpw (from your first version)
+        if not bcrypt.checkpw(password.encode('utf-8'), stored_password):
+            return jsonify({"error": "Invalid email or password"}), 401
+    except Exception as e:
+        # Fallback to check_password_hash if checkpw fails (from your second version)
+        try:
+            if not bcrypt.check_password_hash(stored_password, password.encode('utf-8')):
+                return jsonify({"error": "Invalid email or password"}), 401
+        except Exception as e:
+            return jsonify({"error": "Authentication error"}), 500
 
+    # Check if profile is complete
     profile = profiles_collection.find_one({"email": email})
     profile_complete = (
         profile
@@ -917,6 +980,7 @@ def login():
         and profile.get("weight")
     )
 
+    # Create JWT token
     token = create_access_token(identity=email)
 
     return jsonify({
@@ -924,6 +988,10 @@ def login():
         "token": token,
         "profileComplete": profile_complete
     }), 200
+
+otp_store = {}
+
+OTP_EXPIRY_MINUTES = int(os.getenv("OTP_EXPIRY_MINUTES", 5))
 
 def get_current_date():
     return datetime.utcnow().strftime("%Y-%m-%d")
