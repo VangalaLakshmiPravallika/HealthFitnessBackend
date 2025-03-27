@@ -3,7 +3,7 @@ import pandas as pd
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from flask_jwt_extended import create_access_token, jwt_required, JWTManager, get_jwt_identity
-import bcrypt
+from flask_bcrypt import Bcrypt
 from pymongo import MongoClient
 from dotenv import load_dotenv
 from datetime import datetime
@@ -48,6 +48,7 @@ app.config['MAIL_DEFAULT_SENDER'] = 'pravalliva11@gmail.com'
 
 mail = Mail(app)
 OTP_EXPIRY_MINUTES = 10
+bcrypt = Bcrypt(app)
 
 
 MONGO_URI=os.getenv("MONGO_URI")
