@@ -687,10 +687,10 @@ def update_challenge_progress():
     data = request.json
     user_email = get_jwt_identity()
     challenge_name = data.get("challenge_name")
-    progress = data.get("progress")
+    progress_value = data.get("progress_value")  # Changed from fixed progress to dynamic value
 
-    if not challenge_name or progress is None:
-        return jsonify({"error": "Challenge name and progress are required"}), 400
+    if not challenge_name or progress_value is None:
+        return jsonify({"error": "Challenge name and progress value are required"}), 400
 
     challenge = challenges_collection.find_one({"name": challenge_name})
     if not challenge:
@@ -700,8 +700,10 @@ def update_challenge_progress():
     if not user_progress:
         return jsonify({"error": "You have not joined this challenge"}), 403
 
-    new_progress = user_progress["progress"] + progress
-    is_completed = new_progress >= challenge["target"]
+    # Calculate progress based on the challenge's target and the provided value
+    progress_increment = (progress_value / challenge["target"]) * 100
+    new_progress = min(user_progress["progress"] + progress_increment, 100)
+    is_completed = new_progress >= 100
 
     user_challenges_collection.update_one(
         {"email": user_email, "challenge_name": challenge_name},
@@ -710,7 +712,7 @@ def update_challenge_progress():
 
     if is_completed:
         badge_title = f"🏆 {challenge_name} Champion"
-        badge_description = f"Congratulations! You completed the '{challenge_name}' challenge and earned the {badge_title} badge!"
+        badge_description = f"Congratulations! You completed the '{challenge_name}' challenge!"
 
         achievements_collection.insert_one({
             "user": user_email,
@@ -726,8 +728,11 @@ def update_challenge_progress():
             "badge": badge_title
         }), 200
 
-    return jsonify({"message": "Progress updated successfully!", "new_progress": new_progress}), 200
-
+    return jsonify({
+        "message": "Progress updated successfully!",
+        "new_progress": new_progress,
+        "completed": is_completed
+    }), 200
 
 @app.route("/api/reset-challenge-progress", methods=["POST"])
 @jwt_required()
