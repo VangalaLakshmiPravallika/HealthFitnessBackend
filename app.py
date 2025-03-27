@@ -165,23 +165,23 @@ def verify_otp():
 def reset_password():
     try:
         data = request.get_json()
-        if not data:
-            return jsonify({'error': 'No JSON data received'}), 400
-
         email = data.get('email')
         new_password = data.get('password')
 
         if not email or not new_password:
-            return jsonify({'error': 'Email and new password are required'}), 400
+            return jsonify({'error': 'Email and password are required'}), 400
 
         user = users_collection.find_one({'email': email})
         if not user or not user.get('otp_verified'):
             return jsonify({'error': 'OTP verification required'}), 403
 
-        # Hash the new password
-        hashed_password = bcrypt.generate_password_hash(new_password).decode('utf-8')
+        if isinstance(new_password, str):
+            new_password = new_password.encode('utf-8')
+        
+        hashed_password = bcrypt.generate_password_hash(new_password)
+        if isinstance(hashed_password, bytes):
+            hashed_password = hashed_password.decode('utf-8')
 
-        # Update password and clear OTP fields
         result = users_collection.update_one(
             {'email': email},
             {
@@ -197,6 +197,7 @@ def reset_password():
 
     except Exception as e:
         return jsonify({'error': f"Error resetting password: {str(e)}"}), 500
+
 
 exercises_df = pd.read_csv('fitness_exercises.csv')  
 
@@ -1013,8 +1014,6 @@ def login():
     }), 200
 
 otp_store = {}
-
-OTP_EXPIRY_MINUTES = int(os.getenv("OTP_EXPIRY_MINUTES", 5))
 
 def get_current_date():
     return datetime.utcnow().strftime("%Y-%m-%d")
