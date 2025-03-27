@@ -17,8 +17,25 @@ def app():
     app.users_collection = app.db.users
     app.profiles_collection = app.db.profiles
     app.challenges_collection = app.db.challenges
-
+    app.user_challenges_collection = app.db.user_challenges  
+    app.groups_collection = app.db.groups  
+    app.sleep_collection = app.db.sleep  
+    app.meals_collection = app.db.meals  
+    app.posts_collection = app.db.posts  
+    
     app.mail = type('Mail', (), {'send': lambda x: True})
+
+    app.food_database = {
+        "Apple": {"Calories (kcal)": 52, "Protein (g)": 0.3},
+        "Chicken": {"Calories (kcal)": 239, "Protein (g)": 27}
+    }
+
+    app.exercises_df = pd.DataFrame([{
+        "id": 1, 
+        "name": "Push-up", 
+        "bodyPart": "chest", 
+        "equipment": "body weight"
+    }])
     
     with app.app_context():
         JWTManager(app)
