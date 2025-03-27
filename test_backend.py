@@ -19,7 +19,9 @@ class TestHealthFitnessApp(unittest.TestCase):
             "password": cls.test_password
         }
         response = requests.post(f"{BASE_URL}/register", json=register_data)
-        cls.assertEqual(response.status_code, 201)
+        
+        if response.status_code != 201:
+            raise AssertionError(f"Registration failed with status code {response.status_code}")
         
         # Store auth token for subsequent requests
         login_data = {
@@ -27,7 +29,10 @@ class TestHealthFitnessApp(unittest.TestCase):
             "password": cls.test_password
         }
         response = requests.post(f"{BASE_URL}/login", json=login_data)
-        cls.assertEqual(response.status_code, 200)
+        
+        if response.status_code != 200:
+            raise AssertionError(f"Login failed with status code {response.status_code}")
+        
         cls.auth_token = response.json().get("token")
         cls.headers = {"Authorization": f"Bearer {cls.auth_token}"}
         
@@ -45,7 +50,9 @@ class TestHealthFitnessApp(unittest.TestCase):
             json=profile_data,
             headers=cls.headers
         )
-        cls.assertEqual(response.status_code, 201)
+        
+        if response.status_code != 201:
+            raise AssertionError(f"Profile creation failed with status code {response.status_code}")
 
     def test_1_login(self):
         """Test login functionality"""
@@ -175,8 +182,14 @@ class TestHealthFitnessApp(unittest.TestCase):
         self.assertGreater(len(personalized), 0)
         
         # Track workout progress
+        progress_data = {
+            "workout_type": "cardio",
+            "duration": 30,
+            "intensity": "moderate"
+        }
         response = requests.post(
             f"{BASE_URL}/track-progress",
+            json=progress_data,
             headers=self.headers
         )
         self.assertEqual(response.status_code, 200)
