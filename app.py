@@ -760,17 +760,34 @@ def get_user_challenges():
 @app.route("/api/get-leaderboard/<challenge_name>", methods=["GET"])
 @jwt_required()
 def get_leaderboard(challenge_name):
-    leaderboard = list(user_challenges_collection.find(
-        {"challenge_name": challenge_name}, {"_id": 0, "email": 1, "progress": 1}))
+    try:
+        # Get all entries for this challenge
+        leaderboard = list(user_challenges_collection.find(
+            {"challenge_name": challenge_name}, 
+            {"_id": 0, "email": 1, "progress": 1}
+        ))
 
-    leaderboard_sorted = sorted(leaderboard, key=lambda x: x["progress"], reverse=True)
+        if not leaderboard:
+            return jsonify({"message": "No entries found for this challenge", "leaderboard": []}), 200
 
-    for entry in leaderboard_sorted:
-        user = users_collection.find_one({"email": entry["email"]}, {"_id": 0, "username": 1})
-        entry["username"] = user["username"] if user else entry["email"]
+        # Sort by progress (descending)
+        leaderboard_sorted = sorted(leaderboard, key=lambda x: x["progress"], reverse=True)
 
-    return jsonify({"leaderboard": leaderboard_sorted}), 200
+        # Add usernames
+        for entry in leaderboard_sorted:
+            user = users_collection.find_one(
+                {"email": entry["email"]}, 
+                {"_id": 0, "username": 1}
+            )
+            entry["username"] = user.get("username", entry["email"]) if user else entry["email"]
+            # Remove email if you want to keep it private
+            del entry["email"]
 
+        return jsonify({"leaderboard": leaderboard_sorted}), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    
 @app.route("/api/leave-challenge", methods=["POST"])
 @jwt_required()
 def leave_challenge():
