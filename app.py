@@ -728,6 +728,7 @@ def update_challenge_progress():
 
     return jsonify({"message": "Progress updated successfully!", "new_progress": new_progress}), 200
 
+
 @app.route("/api/reset-challenge-progress", methods=["POST"])
 @jwt_required()
 def reset_challenge_progress():

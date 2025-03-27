@@ -12,11 +12,16 @@ import smtplib
 import pandas as pd
 import numpy as np
 from sklearn.neighbors import NearestNeighbors
+import sys
+import os
+
+# Add the backend folder to the Python path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'backend')))
 
 # Test configuration
 @pytest.fixture
 def app():
-    from your_app_module import app  # Replace with your actual module name
+    from app import app  
     app.config['TESTING'] = True
     app.config['JWT_SECRET_KEY'] = 'test-secret-key'
     yield app
@@ -73,7 +78,7 @@ def mock_mongo(monkeypatch):
     
     mock_db.__getitem__.side_effect = lambda name: collections[name]
     
-    monkeypatch.setattr('your_app_module.MongoClient', mock_client)
+    monkeypatch.setattr('app.MongoClient', mock_client)
     
     return collections
 
@@ -172,7 +177,7 @@ class TestProfileEndpoints:
         assert response.json['bmi'] == pytest.approx(22.86, 0.01)
 
 class TestWorkoutEndpoints:
-    @patch('your_app_module.exercises_df', pd.DataFrame({
+    @patch('app.exercises_df', pd.DataFrame({
         'id': [1, 2, 3],
         'name': ['Push-up', 'Squat', 'Lunge'],
         'bodyPart': ['chest', 'legs', 'legs'],
@@ -180,15 +185,15 @@ class TestWorkoutEndpoints:
         'target': ['pectorals', 'quads', 'glutes'],
         'tags': ['chest body weight pectorals', 'legs body weight quads', 'legs body weight glutes']
     }))
-    @patch('your_app_module.tfidf_matrix', MagicMock())
-    @patch('your_app_module.cosine_sim', np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]]))
+    @patch('app.tfidf_matrix', MagicMock())
+    @patch('app.cosine_sim', np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]]))
     def test_get_recommendations(self, client, auth_headers, mock_mongo):
         response = client.get('/api/get-recommendations', headers=auth_headers)
         
         assert response.status_code == 200
         assert len(response.json['recommended_workouts']) > 0
 
-    @patch('your_app_module.exercises_df', pd.DataFrame({
+    @patch('app.exercises_df', pd.DataFrame({
         'id': [1, 2, 3],
         'name': ['Push-up', 'Squat', 'Lunge'],
         'bodyPart': ['chest', 'legs', 'legs'],
@@ -196,8 +201,8 @@ class TestWorkoutEndpoints:
         'target': ['pectorals', 'quads', 'glutes'],
         'tags': ['chest body weight pectorals', 'legs body weight quads', 'legs body weight glutes']
     }))
-    @patch('your_app_module.tfidf_matrix', MagicMock())
-    @patch('your_app_module.cosine_sim', np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]]))
+    @patch('app.tfidf_matrix', MagicMock())
+    @patch('app.cosine_sim', np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]]))
     def test_get_personalized_workouts(self, client, auth_headers, mock_mongo):
         mock_mongo['profiles'].find_one.return_value = {
             "email": "test@example.com",
@@ -212,12 +217,12 @@ class TestWorkoutEndpoints:
         assert response.json['intensity_level'] == "intermediate"
 
 class TestMealEndpoints:
-    @patch('your_app_module.food_database', {
+    @patch('app.food_database', {
         "Apple": {"Calories (kcal)": 52, "Protein (g)": 0.3, "Carbohydrates (g)": 14, "Fats (g)": 0.2},
         "Chicken Breast": {"Calories (kcal)": 165, "Protein (g)": 31, "Carbohydrates (g)": 0, "Fats (g)": 3.6}
     })
-    @patch('your_app_module.food_model', MagicMock(spec=NearestNeighbors))
-    @patch('your_app_module.food_df', pd.DataFrame({
+    @patch('app.food_model', MagicMock(spec=NearestNeighbors))
+    @patch('app.food_df', pd.DataFrame({
         'name': ['Apple', 'Chicken Breast'],
         'calories': [52, 165],
         'protein': [0.3, 31],
@@ -332,7 +337,7 @@ class TestGroupEndpoints:
         mock_mongo['groups'].update_one.assert_called_once()
 
 class TestForgotPassword:
-    @patch('your_app_module.mail.send', MagicMock())
+    @patch('app.mail.send', MagicMock())
     def test_forgot_password(self, client, mock_mongo):
         mock_mongo['users'].find_one.return_value = {"email": "test@example.com"}
         
@@ -429,7 +434,7 @@ class TestFitnessAssessment:
         mock_mongo['fitness_assessment'].update_one.assert_called_once()
 
 class TestNewsEndpoint:
-    @patch('your_app_module.requests.get')
+    @patch('app.requests.get')
     def test_get_news(self, mock_get, client):
         mock_response = MagicMock()
         mock_response.json.return_value = {
