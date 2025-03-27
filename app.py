@@ -94,11 +94,9 @@ def forgot_password():
         if not user:
             return jsonify({'error': 'User not found'}), 404
 
-        # Generate 6-digit OTP
         otp = str(random.randint(100000, 999999))
         expiry_time = datetime.utcnow() + timedelta(minutes=OTP_EXPIRY_MINUTES)
 
-        # Store OTP in database
         users_collection.update_one(
             {'email': email},
             {'$set': {
@@ -108,7 +106,6 @@ def forgot_password():
             }}
         )
 
-        # Send email
         msg = Message(
             subject="Password Reset OTP",
             recipients=[email],
@@ -141,7 +138,6 @@ def verify_otp():
             return jsonify({'error': 'OTP not found for this email'}), 404
 
         if datetime.utcnow() > user['otp_expiry']:
-            # Clean up expired OTP
             users_collection.update_one(
                 {'email': email},
                 {'$unset': {'otp': '', 'otp_expiry': '', 'otp_verified': ''}}
@@ -151,7 +147,6 @@ def verify_otp():
         if user['otp'] != otp:
             return jsonify({'error': 'Invalid OTP'}), 400
 
-        # Mark OTP as verified
         users_collection.update_one(
             {'email': email},
             {'$set': {'otp_verified': True}}
@@ -217,7 +212,7 @@ def get_intensity_level(bmi):
 
 def format_gif_url(exercise_id):
     try:
-        exercise_id = str(int(exercise_id)).zfill(4)  # Ensure 4-digit format
+        exercise_id = str(int(exercise_id)).zfill(4)  
         return f"https://d205bpvrqc9yn1.cloudfront.net/{exercise_id}.gif"
     except:
         return None
@@ -230,7 +225,6 @@ def get_recommendations():
         if exercises_df.empty:
             raise Exception("Exercise data not loaded")
             
-        # Get 6 random exercises
         general_recs = exercises_df.sample(n=6).copy()
         general_recs['gifUrl'] = general_recs['id'].apply(format_gif_url)
         
@@ -266,24 +260,18 @@ def get_personalized_workouts():
         intensity = get_intensity_level(bmi)
         preferred_body_part = user.get("preferred_body_part", "all")
         equipment_available = user.get("equipment", ["body weight"])
-        
-        # Filter exercises
         filtered_exercises = exercises_df.copy()
         
-        # Intensity filtering
         if intensity == 'beginner':
             filtered_exercises = filtered_exercises[~filtered_exercises['name'].str.contains('advanced|pro', case=False)]
         elif intensity == 'low-impact':
             filtered_exercises = filtered_exercises[filtered_exercises['equipment'].str.contains('body weight|resistance band', case=False)]
         
-        # Preference filtering
         if preferred_body_part != "all":
             filtered_exercises = filtered_exercises[filtered_exercises['bodyPart'] == preferred_body_part]
         
-        # Equipment filtering
         filtered_exercises = filtered_exercises[filtered_exercises['equipment'].isin(equipment_available)]
         
-        # Recommendation logic
         if 'workout_history' in user:
             try:
                 history = pd.DataFrame(user['workout_history'])
@@ -359,7 +347,6 @@ def initialize_model():
             print("⚠ Food database not loaded - cannot initialize model")
             return None, None
         
-        # Convert food database to DataFrame for modeling
         foods = []
         for name, nutrients in food_database.items():
             foods.append({
@@ -382,8 +369,7 @@ def initialize_model():
 food_model, food_df = initialize_model()
 
 def calculate_calorie_needs(bmi, weight_kg, activity_level):
-    # Harris-Benedict formula (simplified)
-    base_calories = weight_kg * 22  # Rough estimate
+    base_calories = weight_kg * 22 
     activity_multiplier = {
         'sedentary': 1.2,
         'light': 1.375,
@@ -392,23 +378,20 @@ def calculate_calorie_needs(bmi, weight_kg, activity_level):
         'very_active': 1.9
     }.get(activity_level, 1.2)
     
-    # Adjust based on BMI goals
     if bmi < 18.5:
-        return base_calories * activity_multiplier * 1.1  # Gain weight
+        return base_calories * activity_multiplier * 1.1 
     elif bmi > 25:
-        return base_calories * activity_multiplier * 0.9  # Lose weight
+        return base_calories * activity_multiplier * 0.9  
     else:
-        return base_calories * activity_multiplier  # Maintain
+        return base_calories * activity_multiplier  
 
 def generate_meal_plan(bmi, daily_calories):
-    """Generate complete meal plan based on BMI and calories"""
     if not food_model or food_df.empty:
         raise ValueError("Food database not initialized")
     
-    # Get macros based on BMI
     macros = get_macros_by_bmi(bmi)
     
-    # Generate meals
+    
     meals = {
         'breakfast': generate_meal(daily_calories * 0.25, macros),
         'lunch': generate_meal(daily_calories * 0.35, macros),
@@ -419,7 +402,6 @@ def generate_meal_plan(bmi, daily_calories):
         ]
     }
     
-    # Calculate totals
     meals['total_calories'] = sum(
         meal['total_calories'] 
         for meal in meals.values() 
@@ -430,23 +412,21 @@ def generate_meal_plan(bmi, daily_calories):
 
 def get_macros_by_bmi(bmi):
     """Determine macronutrient ratios based on BMI"""
-    if bmi < 18.5:  # Underweight
+    if bmi < 18.5:  
         return {'protein': 0.25, 'carbs': 0.50, 'fat': 0.25}
-    elif bmi > 25:  # Overweight
+    elif bmi > 25:  
         return {'protein': 0.35, 'carbs': 0.40, 'fat': 0.25}
-    else:  # Normal weight
+    else: 
         return {'protein': 0.30, 'carbs': 0.45, 'fat': 0.25}
 
 def generate_meal(calories, macros):
-    """Generate a single meal that fits the macros"""
-    target_protein = calories * macros['protein'] / 4  # 4 cal/g protein
-    target_carbs = calories * macros['carbs'] / 4      # 4 cal/g carbs
-    target_fat = calories * macros['fat'] / 9          # 9 cal/g fat
+    target_protein = calories * macros['protein'] / 4  
+    target_carbs = calories * macros['carbs'] / 4     
+    target_fat = calories * macros['fat'] / 9         
     
     target_vector = [calories, target_protein, target_carbs, target_fat]
     distances, indices = food_model.kneighbors([target_vector])
     
-    # Select 3 random foods from nearest neighbors
     selected_indices = random.sample(list(indices[0]), min(3, len(indices[0])))
     meal_foods = food_df.iloc[selected_indices].to_dict('records')
     
@@ -469,8 +449,6 @@ def generate_meal(calories, macros):
 def get_meal_plan():
     try:
         user_email = get_jwt_identity()
-        
-        # Get profile with only needed fields
         profile = profiles_collection.find_one(
             {"email": user_email},
             {"_id": 0, "bmi": 1, "daily_calories": 1, "goals": 1}
@@ -482,14 +460,12 @@ def get_meal_plan():
         if 'bmi' not in profile or 'daily_calories' not in profile:
             return jsonify({"error": "Incomplete profile data"}), 400
             
-        # Adjust calories based on goals
         daily_calories = adjust_calories_by_goal(
             profile['daily_calories'],
             profile.get('goals', 'maintain'),
             profile['bmi']
         )
         
-        # Generate meal plan
         meal_plan = generate_meal_plan(
             bmi=profile['bmi'],
             daily_calories=daily_calories
@@ -507,7 +483,6 @@ def get_meal_plan():
         }), 500
 
 def adjust_calories_by_goal(base_calories, goal, bmi):
-    """Adjust calories based on goal without activity factor"""
     if goal == "lose_weight" or bmi > 25:
         return base_calories * 0.9  
     elif goal == "gain_weight" or bmi < 18.5:
@@ -567,7 +542,6 @@ def recommend_diet():
     try:
         print(f"📩 Fetching user data for: {user_email}")
 
-        # Fetch user's stored BMI
         user = profiles_collection.find_one({"email": user_email}, {"_id": 0, "bmi": 1})
         if not user or "bmi" not in user:
             print("❌ BMI not found. User must update their profile.")
@@ -576,7 +550,6 @@ def recommend_diet():
         bmi = user["bmi"]
         print(f"✅ Retrieved BMI: {bmi}")
 
-        # Fetch user's meal log & calculate nutrition summary
         meals = list(meal_collection.find({"user": user_email}, {"_id": 0}))
         if not meals:
             print("⚠ No meal data found for user.")
@@ -590,7 +563,6 @@ def recommend_diet():
         }
         print(f"📊 Nutrition Summary: {total_nutrition}")
 
-        # Load trained K-Means model
         model_path = os.path.join(os.getcwd(), "diet_kmeans.pkl")
         if not os.path.exists(model_path):
             print(f"❌ Model file not found at {model_path}")
@@ -599,14 +571,12 @@ def recommend_diet():
         kmeans_model = joblib.load(model_path)
         print("✅ Model loaded successfully!")
 
-        # Predict Cluster (Using BMI & default values for meal frequency)
         user_data = [[bmi, 3, 4, 2, 2]]
         print(f"📊 Predicting cluster for input: {user_data}")
 
         cluster = kmeans_model.predict(user_data)[0]
         print(f"✅ Predicted Cluster: {cluster}")
 
-        # Define diet plans per cluster
         diet_plans = {
             0: {
                 "goal": "Weight Gain",
@@ -790,11 +760,33 @@ def get_user_challenges():
 @app.route("/api/get-leaderboard/<challenge_name>", methods=["GET"])
 @jwt_required()
 def get_leaderboard(challenge_name):
-    leaderboard = list(user_challenges_collection.find({"challenge_name": challenge_name}, {"_id": 0, "email": 1, "progress": 1}))
+    leaderboard = list(user_challenges_collection.find(
+        {"challenge_name": challenge_name}, {"_id": 0, "email": 1, "progress": 1}))
 
     leaderboard_sorted = sorted(leaderboard, key=lambda x: x["progress"], reverse=True)
-    
+
+    for entry in leaderboard_sorted:
+        user = users_collection.find_one({"email": entry["email"]}, {"_id": 0, "username": 1})
+        entry["username"] = user["username"] if user else entry["email"]
+
     return jsonify({"leaderboard": leaderboard_sorted}), 200
+
+@app.route("/api/leave-challenge", methods=["POST"])
+@jwt_required()
+def leave_challenge():
+    data = request.json
+    user_email = get_jwt_identity()
+    challenge_name = data.get("challenge_name")
+
+    if not challenge_name:
+        return jsonify({"error": "Challenge name is required"}), 400
+
+    result = user_challenges_collection.delete_one({"email": user_email, "challenge_name": challenge_name})
+
+    if result.deleted_count > 0:
+        return jsonify({"message": f"You have left the '{challenge_name}' challenge."}), 200
+
+    return jsonify({"error": "Challenge not found or not joined."}), 404
 
 
 @app.route("/api/add-challenge", methods=["POST"])
@@ -829,13 +821,11 @@ def store_profile():
     user_email = get_jwt_identity()
     data = request.json
     
-    # Validate required fields
     required_fields = ["name", "age", "gender", "height", "weight"]
     if not all(field in data for field in required_fields):
         return jsonify({"error": "Missing required fields"}), 400
     
     try:
-        # Convert and validate data types
         age = int(data["age"])
         height = float(data["height"])
         weight = float(data["weight"])
@@ -845,7 +835,6 @@ def store_profile():
     except ValueError as e:
         return jsonify({"error": f"Invalid data format: {str(e)}"}), 400
 
-    # Calculate derived values
     bmi = calculate_bmi(weight, height)
     daily_calories = calculate_base_calories(weight, data.get("gender", "male"))
 
@@ -861,8 +850,6 @@ def store_profile():
         "goals": data.get("goals", "maintain"),
         "updated_at": datetime.utcnow(),
     }
-    
-    # Create or update profile
     result = profiles_collection.update_one(
         {"email": user_email},
         {"$set": profile_data},
@@ -968,33 +955,27 @@ def login():
     email = data.get("email")
     password = data.get("password")
 
-    # Validate input
     if not email or not password:
         return jsonify({"error": "Email and password are required"}), 400
 
-    # Find user in database
     user = users_collection.find_one({"email": email})
     if not user:
         return jsonify({"error": "Invalid email or password"}), 401
 
-    # Check password
     stored_password = user["password"]
     if isinstance(stored_password, str):
         stored_password = stored_password.encode('utf-8')
 
     try:
-        # First try bcrypt.checkpw (from your first version)
         if not bcrypt.checkpw(password.encode('utf-8'), stored_password):
             return jsonify({"error": "Invalid email or password"}), 401
     except Exception as e:
-        # Fallback to check_password_hash if checkpw fails (from your second version)
         try:
             if not bcrypt.check_password_hash(stored_password, password.encode('utf-8')):
                 return jsonify({"error": "Invalid email or password"}), 401
         except Exception as e:
             return jsonify({"error": "Authentication error"}), 500
 
-    # Check if profile is complete
     profile = profiles_collection.find_one({"email": email})
     profile_complete = (
         profile
@@ -1005,7 +986,6 @@ def login():
         and profile.get("weight")
     )
 
-    # Create JWT token
     token = create_access_token(identity=email)
 
     return jsonify({
@@ -1142,7 +1122,6 @@ def get_sleep_streak():
 def reset_sleep():
     user_email = get_jwt_identity()
     
-    # Reset sleep value in the database
     user_challenges_collection.update_one(
         {"email": user_email, "challenge_name": "Sleep Tracker"},
         {"$set": {"progress": 0}}
