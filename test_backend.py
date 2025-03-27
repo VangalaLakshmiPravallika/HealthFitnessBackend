@@ -15,7 +15,6 @@ from sklearn.neighbors import NearestNeighbors
 import sys
 import os
 
-# Add the backend folder to the Python path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'backend')))
 
 # Test configuration
@@ -31,22 +30,29 @@ def client(app):
     return app.test_client()
 
 @pytest.fixture
-def auth_headers(client):
-    # Register a test user
-    test_user = {
-        "email": "test@example.com",
-        "password": "testpassword"
-    }
-    client.post('/api/register', json=test_user)
-    
-    # Login to get token
-    response = client.post('/api/login', json=test_user)
-    token = response.json['token']
-    
-    return {
-        'Authorization': f'Bearer {token}',
-        'Content-Type': 'application/json'
-    }
+def auth_headers(client, mock_mongo):
+    # Mock the bcrypt.hashpw function
+    with patch('app.bcrypt.hashpw', return_value=b'hashed_password'):
+        with patch('app.bcrypt.gensalt', return_value=b'salt'):
+            # Register a test user
+            test_user = {
+                "email": "test@example.com",
+                "password": "testpassword"
+            }
+            client.post('/api/register', json=test_user)
+            
+            # Login to get token
+            mock_mongo['users'].find_one.return_value = {
+                "email": "test@example.com",
+                "password": b'hashed_password'
+            }
+            response = client.post('/api/login', json=test_user)
+            token = response.json['token']
+            
+            return {
+                'Authorization': f'Bearer {token}',
+                'Content-Type': 'application/json'
+            }
 
 # Mock MongoDB collections
 @pytest.fixture(autouse=True)
@@ -87,10 +93,12 @@ class TestAuthEndpoints:
     def test_register(self, client, mock_mongo):
         mock_mongo['users'].find_one.return_value = None
         
-        response = client.post('/api/register', json={
-            "email": "new@example.com",
-            "password": "newpassword"
-        })
+        with patch('app.bcrypt.hashpw', return_value=b'hashed_password'):
+            with patch('app.bcrypt.gensalt', return_value=b'salt'):
+                response = client.post('/api/register', json={
+                    "email": "new@example.com",
+                    "password": "newpassword"
+                })
         
         assert response.status_code == 201
         assert response.json['message'] == "User registered successfully!"
@@ -108,36 +116,35 @@ class TestAuthEndpoints:
         assert "already exists" in response.json['error']
 
     def test_login_success(self, client, mock_mongo):
-        hashed = bcrypt.hashpw(b"testpassword", bcrypt.gensalt())
         mock_mongo['users'].find_one.return_value = {
             "email": "test@example.com",
-            "password": hashed
+            "password": b'hashed_password'
         }
         mock_mongo['profiles'].find_one.return_value = None
         
-        response = client.post('/api/login', json={
-            "email": "test@example.com",
-            "password": "testpassword"
-        })
+        with patch('app.bcrypt.checkpw', return_value=True):
+            response = client.post('/api/login', json={
+                "email": "test@example.com",
+                "password": "testpassword"
+            })
         
         assert response.status_code == 200
         assert "token" in response.json
 
     def test_login_invalid_credentials(self, client, mock_mongo):
-        hashed = bcrypt.hashpw(b"rightpassword", bcrypt.gensalt())
         mock_mongo['users'].find_one.return_value = {
             "email": "test@example.com",
-            "password": hashed
+            "password": b'hashed_password'
         }
         
-        response = client.post('/api/login', json={
-            "email": "test@example.com",
-            "password": "wrongpassword"
-        })
+        with patch('app.bcrypt.checkpw', return_value=False):
+            response = client.post('/api/login', json={
+                "email": "test@example.com",
+                "password": "wrongpassword"
+            })
         
         assert response.status_code == 401
         assert "Invalid" in response.json['error']
-
 class TestProfileEndpoints:
     def test_store_profile(self, client, auth_headers, mock_mongo):
         test_profile = {
