@@ -14,3 +14,4 @@ scikit-learn
 pandas
 numpy
 Flask-Mail
+flask-bcrypt
