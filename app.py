@@ -78,6 +78,126 @@ from sklearn.metrics.pairwise import cosine_similarity
 from flask import jsonify
 from pymongo import MongoClient
 
+@app.route('/forgot-password', methods=['POST'])
+def forgot_password():
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'No JSON data received'}), 400
+
+        email = data.get('email')
+        if not email:
+            return jsonify({'error': 'Email is required'}), 400
+
+        user = users_collection.find_one({'email': email})
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+
+        # Generate 6-digit OTP
+        otp = str(random.randint(100000, 999999))
+        expiry_time = datetime.utcnow() + timedelta(minutes=OTP_EXPIRY_MINUTES)
+
+        # Store OTP in database
+        users_collection.update_one(
+            {'email': email},
+            {'$set': {
+                'otp': otp,
+                'otp_expiry': expiry_time,
+                'otp_verified': False
+            }}
+        )
+
+        # Send email
+        msg = Message(
+            subject="Password Reset OTP",
+            recipients=[email],
+            body=f"Your OTP for password reset is: {otp}. It is valid for {OTP_EXPIRY_MINUTES} minutes."
+        )
+
+        with app.app_context():
+            mail.send(msg)
+        
+        return jsonify({'message': 'OTP sent to email'}), 200
+
+    except Exception as e:
+        return jsonify({'error': f"Error processing request: {str(e)}"}), 500
+
+@app.route('/verify-otp', methods=['POST'])
+def verify_otp():
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'No JSON data received'}), 400
+
+        email = data.get('email')
+        otp = data.get('otp')
+
+        if not email or not otp:
+            return jsonify({'error': 'Email and OTP are required'}), 400
+
+        user = users_collection.find_one({'email': email})
+        if not user or not user.get('otp'):
+            return jsonify({'error': 'OTP not found for this email'}), 404
+
+        if datetime.utcnow() > user['otp_expiry']:
+            # Clean up expired OTP
+            users_collection.update_one(
+                {'email': email},
+                {'$unset': {'otp': '', 'otp_expiry': '', 'otp_verified': ''}}
+            )
+            return jsonify({'error': 'OTP has expired'}), 400
+
+        if user['otp'] != otp:
+            return jsonify({'error': 'Invalid OTP'}), 400
+
+        # Mark OTP as verified
+        users_collection.update_one(
+            {'email': email},
+            {'$set': {'otp_verified': True}}
+        )
+
+        return jsonify({'message': 'OTP verified successfully'}), 200
+
+    except Exception as e:
+        return jsonify({'error': f"Error verifying OTP: {str(e)}"}), 500
+
+@app.route('/reset-password', methods=['POST'])
+def reset_password():
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'No JSON data received'}), 400
+
+        email = data.get('email')
+        new_password = data.get('password')
+
+        if not email or not new_password:
+            return jsonify({'error': 'Email and new password are required'}), 400
+
+        user = users_collection.find_one({'email': email})
+        if not user or not user.get('otp_verified'):
+            return jsonify({'error': 'OTP verification required'}), 403
+
+        # Hash the new password
+        hashed_password = bcrypt.generate_password_hash(new_password).decode('utf-8')
+
+        # Update password and clear OTP fields
+        result = users_collection.update_one(
+            {'email': email},
+            {
+                '$set': {'password': hashed_password},
+                '$unset': {'otp': '', 'otp_expiry': '', 'otp_verified': ''}
+            }
+        )
+
+        if result.modified_count == 0:
+            return jsonify({'error': 'Password update failed'}), 500
+
+        return jsonify({'message': 'Password reset successfully'}), 200
+
+    except Exception as e:
+        return jsonify({'error': f"Error resetting password: {str(e)}"}), 500
+
 exercises_df = pd.read_csv('fitness_exercises.csv')  
 
 exercises_df['tags'] = exercises_df['bodyPart'] + ' ' + exercises_df['equipment'] + ' ' + exercises_df['target']
