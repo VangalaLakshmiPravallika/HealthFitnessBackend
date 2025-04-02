@@ -217,6 +217,7 @@ def format_gif_url(exercise_id):
         return None
 
 def create_weekly_workout_plan(filtered_exercises, intensity, workout_history=None):
+    # Define workout splits based on intensity
     if intensity == 'beginner':
         splits = {
             'Monday': {'bodyPart': 'cardio', 'count': 3},
@@ -232,7 +233,7 @@ def create_weekly_workout_plan(filtered_exercises, intensity, workout_history=No
             'Friday': {'bodyPart': 'chest', 'count': 3},
             'Saturday': {'bodyPart': 'cardio', 'count': 2}
         }
-    else:  
+    else:  # advanced or low-impact
         splits = {
             'Monday': {'bodyPart': 'upper arms|lower arms', 'count': 4},
             'Tuesday': {'bodyPart': 'cardio', 'count': 3},
@@ -245,8 +246,10 @@ def create_weekly_workout_plan(filtered_exercises, intensity, workout_history=No
     weekly_plan = {}
     
     for day, params in splits.items():
+        # Filter exercises for the target body part
         day_exercises = filtered_exercises[filtered_exercises['bodyPart'].str.contains(params['bodyPart'], case=False, regex=True)]
         
+        # If no exercises found for the specific body part, fall back to similar ones
         if len(day_exercises) == 0:
             similar_body_parts = {
                 'upper arms': 'arms',
@@ -259,12 +262,16 @@ def create_weekly_workout_plan(filtered_exercises, intensity, workout_history=No
                     day_exercises = filtered_exercises[filtered_exercises['bodyPart'].str.contains(fallback, case=False)]
                     break
         
+        # If we still have no exercises, get random ones
         if len(day_exercises) == 0:
             day_exercises = filtered_exercises
+        
+        # Sample the required number of exercises
         sample_size = min(params['count'], len(day_exercises))
         if workout_history:
             try:
-                recent_exercises = set([ex['exerciseId'] for ex in workout_history[-5:]])  
+                # Try to get exercises not recently done
+                recent_exercises = set([ex['exerciseId'] for ex in workout_history[-5:]])  # last 5 workouts
                 new_exercises = day_exercises[~day_exercises['id'].isin(recent_exercises)]
                 if len(new_exercises) >= sample_size:
                     selected = new_exercises.sample(sample_size)
@@ -275,6 +282,7 @@ def create_weekly_workout_plan(filtered_exercises, intensity, workout_history=No
         else:
             selected = day_exercises.sample(sample_size)
         
+        # Format the exercises
         selected = selected.copy()
         selected['gifUrl'] = selected['id'].apply(format_gif_url)
         weekly_plan[day] = selected.replace({pd.NA: None}).to_dict('records')
@@ -284,6 +292,7 @@ def create_weekly_workout_plan(filtered_exercises, intensity, workout_history=No
 @app.route("/api/get-personalized-weekly-plan", methods=["GET"])
 @jwt_required()
 def get_personalized_weekly_plan():
+    """Personalized weekly workout plan based on user profile"""
     try:
         if exercises_df.empty or cosine_sim is None:
             raise Exception("Exercise data not loaded")
@@ -303,6 +312,7 @@ def get_personalized_weekly_plan():
         equipment_available = user.get("equipment", ["body weight"])
         workout_history = user.get("workout_history", [])
         
+        # Filter exercises based on user profile
         filtered_exercises = exercises_df.copy()
         
         if intensity == 'beginner':
@@ -311,12 +321,14 @@ def get_personalized_weekly_plan():
             filtered_exercises = filtered_exercises[filtered_exercises['equipment'].str.contains('body weight|resistance band', case=False)]
         
         if preferred_body_part != "all":
+            # Boost preferred body part exercises by including them more often
             preferred_exercises = filtered_exercises[filtered_exercises['bodyPart'] == preferred_body_part]
             other_exercises = filtered_exercises[filtered_exercises['bodyPart'] != preferred_body_part]
             filtered_exercises = pd.concat([preferred_exercises, preferred_exercises, other_exercises])
         
         filtered_exercises = filtered_exercises[filtered_exercises['equipment'].isin(equipment_available)]
         
+        # Create weekly plan
         weekly_plan = create_weekly_workout_plan(filtered_exercises, intensity, workout_history)
         
         return jsonify({
@@ -411,38 +423,33 @@ def calculate_calorie_needs(bmi, weight_kg, activity_level):
     else:
         return base_calories * activity_multiplier  
 
-def generate_weekly_meal_plan(bmi, daily_calories):
-    weekly_plan = {}
-    days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+def generate_meal_plan(bmi, daily_calories):
+    if not food_model or food_df.empty:
+        raise ValueError("Food database not initialized")
     
-    for day in days:
-        try:
-            daily_meals = {
-                'breakfast': generate_meal(daily_calories * 0.25, get_macros_by_bmi(bmi)),
-                'lunch': generate_meal(daily_calories * 0.35, get_macros_by_bmi(bmi)),
-                'dinner': generate_meal(daily_calories * 0.30, get_macros_by_bmi(bmi)),
-                'snacks': [
-                    generate_meal(daily_calories * 0.05, get_macros_by_bmi(bmi)),
-                    generate_meal(daily_calories * 0.05, get_macros_by_bmi(bmi))
-                ]
-            }
-            
-            daily_meals['total_calories'] = (
-                daily_meals['breakfast']['total_calories'] +
-                daily_meals['lunch']['total_calories'] +
-                daily_meals['dinner']['total_calories'] +
-                sum(snack['total_calories'] for snack in daily_meals['snacks'])
-            )
-            
-            weekly_plan[day] = daily_meals
-            
-        except Exception as e:
-            print(f"Error generating meal plan for {day}: {e}")
-            weekly_plan[day] = {"error": f"Failed to generate plan for {day}"}
+    macros = get_macros_by_bmi(bmi)
     
-    return weekly_plan
+    
+    meals = {
+        'breakfast': generate_meal(daily_calories * 0.25, macros),
+        'lunch': generate_meal(daily_calories * 0.35, macros),
+        'dinner': generate_meal(daily_calories * 0.30, macros),
+        'snacks': [
+            generate_meal(daily_calories * 0.05, macros),
+            generate_meal(daily_calories * 0.05, macros)
+        ]
+    }
+    
+    meals['total_calories'] = sum(
+        meal['total_calories'] 
+        for meal in meals.values() 
+        if isinstance(meal, dict)
+    )
+    
+    return meals
 
 def get_macros_by_bmi(bmi):
+    """Determine macronutrient ratios based on BMI"""
     if bmi < 18.5:  
         return {'protein': 0.25, 'carbs': 0.50, 'fat': 0.25}
     elif bmi > 25:  
@@ -475,9 +482,9 @@ def generate_meal(calories, macros):
         'total_fat': sum(f['fat'] for f in meal_foods)
     }
 
-@app.route('/api/weekly-meal-plan', methods=['GET'])
+@app.route('/api/meal-plan', methods=['GET'])
 @jwt_required()
-def get_weekly_meal_plan():
+def get_meal_plan():
     try:
         user_email = get_jwt_identity()
         profile = profiles_collection.find_one(
@@ -497,7 +504,7 @@ def get_weekly_meal_plan():
             profile['bmi']
         )
         
-        meal_plan = generate_weekly_meal_plan(
+        meal_plan = generate_meal_plan(
             bmi=profile['bmi'],
             daily_calories=daily_calories
         )
