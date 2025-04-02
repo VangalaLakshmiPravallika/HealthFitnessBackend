@@ -216,83 +216,32 @@ def format_gif_url(exercise_id):
     except:
         return None
 
-def create_weekly_workout_plan(filtered_exercises, intensity, workout_history=None):
-    # Define workout splits based on intensity
-    if intensity == 'beginner':
-        splits = {
-            'Monday': {'bodyPart': 'cardio', 'count': 3},
-            'Wednesday': {'bodyPart': 'full body', 'count': 4},
-            'Friday': {'bodyPart': 'full body', 'count': 4}
-        }
-    elif intensity == 'intermediate':
-        splits = {
-            'Monday': {'bodyPart': 'upper arms', 'count': 3},
-            'Tuesday': {'bodyPart': 'cardio', 'count': 2},
-            'Wednesday': {'bodyPart': 'lower legs', 'count': 3},
-            'Thursday': {'bodyPart': 'back', 'count': 3},
-            'Friday': {'bodyPart': 'chest', 'count': 3},
-            'Saturday': {'bodyPart': 'cardio', 'count': 2}
-        }
-    else:  # advanced or low-impact
-        splits = {
-            'Monday': {'bodyPart': 'upper arms|lower arms', 'count': 4},
-            'Tuesday': {'bodyPart': 'cardio', 'count': 3},
-            'Wednesday': {'bodyPart': 'upper legs|lower legs', 'count': 4},
-            'Thursday': {'bodyPart': 'back|waist', 'count': 4},
-            'Friday': {'bodyPart': 'chest|shoulders', 'count': 4},
-            'Saturday': {'bodyPart': 'cardio', 'count': 3}
-        }
-    
-    weekly_plan = {}
-    
-    for day, params in splits.items():
-        # Filter exercises for the target body part
-        day_exercises = filtered_exercises[filtered_exercises['bodyPart'].str.contains(params['bodyPart'], case=False, regex=True)]
-        
-        # If no exercises found for the specific body part, fall back to similar ones
-        if len(day_exercises) == 0:
-            similar_body_parts = {
-                'upper arms': 'arms',
-                'lower legs': 'legs',
-                'back': 'waist',
-                'chest': 'shoulders'
-            }
-            for original, fallback in similar_body_parts.items():
-                if original in params['bodyPart']:
-                    day_exercises = filtered_exercises[filtered_exercises['bodyPart'].str.contains(fallback, case=False)]
-                    break
-        
-        # If we still have no exercises, get random ones
-        if len(day_exercises) == 0:
-            day_exercises = filtered_exercises
-        
-        # Sample the required number of exercises
-        sample_size = min(params['count'], len(day_exercises))
-        if workout_history:
-            try:
-                # Try to get exercises not recently done
-                recent_exercises = set([ex['exerciseId'] for ex in workout_history[-5:]])  # last 5 workouts
-                new_exercises = day_exercises[~day_exercises['id'].isin(recent_exercises)]
-                if len(new_exercises) >= sample_size:
-                    selected = new_exercises.sample(sample_size)
-                else:
-                    selected = day_exercises.sample(sample_size)
-            except:
-                selected = day_exercises.sample(sample_size)
-        else:
-            selected = day_exercises.sample(sample_size)
-        
-        # Format the exercises
-        selected = selected.copy()
-        selected['gifUrl'] = selected['id'].apply(format_gif_url)
-        weekly_plan[day] = selected.replace({pd.NA: None}).to_dict('records')
-    
-    return weekly_plan
-
-@app.route("/api/get-personalized-weekly-plan", methods=["GET"])
+@app.route("/api/get-recommendations", methods=["GET"])
 @jwt_required()
-def get_personalized_weekly_plan():
-    """Personalized weekly workout plan based on user profile"""
+def get_recommendations():
+    """General workout recommendations for all users"""
+    try:
+        if exercises_df.empty:
+            raise Exception("Exercise data not loaded")
+            
+        general_recs = exercises_df.sample(n=6).copy()
+        general_recs['gifUrl'] = general_recs['id'].apply(format_gif_url)
+        
+        return jsonify({
+            "success": True,
+            "recommended_workouts": general_recs.replace({pd.NA: None}).to_dict('records')
+        }), 200
+        
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+@app.route("/api/get-personalized-workouts", methods=["GET"])
+@jwt_required()
+def get_personalized_workouts():
+    """Personalized recommendations based on user profile"""
     try:
         if exercises_df.empty or cosine_sim is None:
             raise Exception("Exercise data not loaded")
@@ -310,9 +259,6 @@ def get_personalized_weekly_plan():
         intensity = get_intensity_level(bmi)
         preferred_body_part = user.get("preferred_body_part", "all")
         equipment_available = user.get("equipment", ["body weight"])
-        workout_history = user.get("workout_history", [])
-        
-        # Filter exercises based on user profile
         filtered_exercises = exercises_df.copy()
         
         if intensity == 'beginner':
@@ -321,21 +267,36 @@ def get_personalized_weekly_plan():
             filtered_exercises = filtered_exercises[filtered_exercises['equipment'].str.contains('body weight|resistance band', case=False)]
         
         if preferred_body_part != "all":
-            # Boost preferred body part exercises by including them more often
-            preferred_exercises = filtered_exercises[filtered_exercises['bodyPart'] == preferred_body_part]
-            other_exercises = filtered_exercises[filtered_exercises['bodyPart'] != preferred_body_part]
-            filtered_exercises = pd.concat([preferred_exercises, preferred_exercises, other_exercises])
+            filtered_exercises = filtered_exercises[filtered_exercises['bodyPart'] == preferred_body_part]
         
         filtered_exercises = filtered_exercises[filtered_exercises['equipment'].isin(equipment_available)]
         
-        # Create weekly plan
-        weekly_plan = create_weekly_workout_plan(filtered_exercises, intensity, workout_history)
+        if 'workout_history' in user:
+            try:
+                history = pd.DataFrame(user['workout_history'])
+                top_exercises = history['exerciseId'].value_counts().head(3).index.tolist()
+                
+                similar_exercises = set()
+                for ex_id in top_exercises:
+                    idx = exercises_df[exercises_df['id'] == ex_id].index[0]
+                    sim_scores = list(enumerate(cosine_sim[idx]))
+                    sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)
+                    similar_exercises.update([i[0] for i in sim_scores[1:4]])
+                
+                recommended_indices = list(similar_exercises)
+            except:
+                recommended_indices = filtered_exercises.sample(min(6, len(filtered_exercises))).index.tolist()
+        else:
+            recommended_indices = filtered_exercises.sample(min(6, len(filtered_exercises))).index.tolist()
+        
+        recommendations = exercises_df.iloc[recommended_indices].copy()
+        recommendations['gifUrl'] = recommendations['id'].apply(format_gif_url)
         
         return jsonify({
             "success": True,
             "bmi": bmi,
             "intensity_level": intensity,
-            "weekly_workout_plan": weekly_plan
+            "recommended_workouts": recommendations.replace({pd.NA: None}).to_dict('records')
         }), 200
         
     except Exception as e:
