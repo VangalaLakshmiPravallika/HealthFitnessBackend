@@ -196,7 +196,6 @@ def reset_password():
 
 
 exercises_df = pd.read_csv('fitness_exercises.csv')  
-
 exercises_df['tags'] = exercises_df['bodyPart'] + ' ' + exercises_df['equipment'] + ' ' + exercises_df['target']
 
 tfidf = TfidfVectorizer(stop_words='english')
@@ -217,32 +216,74 @@ def format_gif_url(exercise_id):
     except:
         return None
 
-@app.route("/api/get-recommendations", methods=["GET"])
-@jwt_required()
-def get_recommendations():
-    """General workout recommendations for all users"""
-    try:
-        if exercises_df.empty:
-            raise Exception("Exercise data not loaded")
-            
-        general_recs = exercises_df.sample(n=6).copy()
-        general_recs['gifUrl'] = general_recs['id'].apply(format_gif_url)
+def create_weekly_workout_plan(filtered_exercises, intensity, workout_history=None):
+    if intensity == 'beginner':
+        splits = {
+            'Monday': {'bodyPart': 'cardio', 'count': 3},
+            'Wednesday': {'bodyPart': 'full body', 'count': 4},
+            'Friday': {'bodyPart': 'full body', 'count': 4}
+        }
+    elif intensity == 'intermediate':
+        splits = {
+            'Monday': {'bodyPart': 'upper arms', 'count': 3},
+            'Tuesday': {'bodyPart': 'cardio', 'count': 2},
+            'Wednesday': {'bodyPart': 'lower legs', 'count': 3},
+            'Thursday': {'bodyPart': 'back', 'count': 3},
+            'Friday': {'bodyPart': 'chest', 'count': 3},
+            'Saturday': {'bodyPart': 'cardio', 'count': 2}
+        }
+    else:  
+        splits = {
+            'Monday': {'bodyPart': 'upper arms|lower arms', 'count': 4},
+            'Tuesday': {'bodyPart': 'cardio', 'count': 3},
+            'Wednesday': {'bodyPart': 'upper legs|lower legs', 'count': 4},
+            'Thursday': {'bodyPart': 'back|waist', 'count': 4},
+            'Friday': {'bodyPart': 'chest|shoulders', 'count': 4},
+            'Saturday': {'bodyPart': 'cardio', 'count': 3}
+        }
+    
+    weekly_plan = {}
+    
+    for day, params in splits.items():
+        day_exercises = filtered_exercises[filtered_exercises['bodyPart'].str.contains(params['bodyPart'], case=False, regex=True)]
         
-        return jsonify({
-            "success": True,
-            "recommended_workouts": general_recs.replace({pd.NA: None}).to_dict('records')
-        }), 200
+        if len(day_exercises) == 0:
+            similar_body_parts = {
+                'upper arms': 'arms',
+                'lower legs': 'legs',
+                'back': 'waist',
+                'chest': 'shoulders'
+            }
+            for original, fallback in similar_body_parts.items():
+                if original in params['bodyPart']:
+                    day_exercises = filtered_exercises[filtered_exercises['bodyPart'].str.contains(fallback, case=False)]
+                    break
         
-    except Exception as e:
-        return jsonify({
-            "success": False,
-            "error": str(e)
-        }), 500
+        if len(day_exercises) == 0:
+            day_exercises = filtered_exercises
+        sample_size = min(params['count'], len(day_exercises))
+        if workout_history:
+            try:
+                recent_exercises = set([ex['exerciseId'] for ex in workout_history[-5:]])  
+                new_exercises = day_exercises[~day_exercises['id'].isin(recent_exercises)]
+                if len(new_exercises) >= sample_size:
+                    selected = new_exercises.sample(sample_size)
+                else:
+                    selected = day_exercises.sample(sample_size)
+            except:
+                selected = day_exercises.sample(sample_size)
+        else:
+            selected = day_exercises.sample(sample_size)
+        
+        selected = selected.copy()
+        selected['gifUrl'] = selected['id'].apply(format_gif_url)
+        weekly_plan[day] = selected.replace({pd.NA: None}).to_dict('records')
+    
+    return weekly_plan
 
-@app.route("/api/get-personalized-workouts", methods=["GET"])
+@app.route("/api/get-personalized-weekly-plan", methods=["GET"])
 @jwt_required()
-def get_personalized_workouts():
-    """Personalized recommendations based on user profile"""
+def get_personalized_weekly_plan():
     try:
         if exercises_df.empty or cosine_sim is None:
             raise Exception("Exercise data not loaded")
@@ -260,6 +301,8 @@ def get_personalized_workouts():
         intensity = get_intensity_level(bmi)
         preferred_body_part = user.get("preferred_body_part", "all")
         equipment_available = user.get("equipment", ["body weight"])
+        workout_history = user.get("workout_history", [])
+        
         filtered_exercises = exercises_df.copy()
         
         if intensity == 'beginner':
@@ -268,36 +311,19 @@ def get_personalized_workouts():
             filtered_exercises = filtered_exercises[filtered_exercises['equipment'].str.contains('body weight|resistance band', case=False)]
         
         if preferred_body_part != "all":
-            filtered_exercises = filtered_exercises[filtered_exercises['bodyPart'] == preferred_body_part]
+            preferred_exercises = filtered_exercises[filtered_exercises['bodyPart'] == preferred_body_part]
+            other_exercises = filtered_exercises[filtered_exercises['bodyPart'] != preferred_body_part]
+            filtered_exercises = pd.concat([preferred_exercises, preferred_exercises, other_exercises])
         
         filtered_exercises = filtered_exercises[filtered_exercises['equipment'].isin(equipment_available)]
         
-        if 'workout_history' in user:
-            try:
-                history = pd.DataFrame(user['workout_history'])
-                top_exercises = history['exerciseId'].value_counts().head(3).index.tolist()
-                
-                similar_exercises = set()
-                for ex_id in top_exercises:
-                    idx = exercises_df[exercises_df['id'] == ex_id].index[0]
-                    sim_scores = list(enumerate(cosine_sim[idx]))
-                    sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)
-                    similar_exercises.update([i[0] for i in sim_scores[1:4]])
-                
-                recommended_indices = list(similar_exercises)
-            except:
-                recommended_indices = filtered_exercises.sample(min(6, len(filtered_exercises))).index.tolist()
-        else:
-            recommended_indices = filtered_exercises.sample(min(6, len(filtered_exercises))).index.tolist()
-        
-        recommendations = exercises_df.iloc[recommended_indices].copy()
-        recommendations['gifUrl'] = recommendations['id'].apply(format_gif_url)
+        weekly_plan = create_weekly_workout_plan(filtered_exercises, intensity, workout_history)
         
         return jsonify({
             "success": True,
             "bmi": bmi,
             "intensity_level": intensity,
-            "recommended_workouts": recommendations.replace({pd.NA: None}).to_dict('records')
+            "weekly_workout_plan": weekly_plan
         }), 200
         
     except Exception as e:
@@ -385,33 +411,38 @@ def calculate_calorie_needs(bmi, weight_kg, activity_level):
     else:
         return base_calories * activity_multiplier  
 
-def generate_meal_plan(bmi, daily_calories):
-    if not food_model or food_df.empty:
-        raise ValueError("Food database not initialized")
+def generate_weekly_meal_plan(bmi, daily_calories):
+    weekly_plan = {}
+    days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
     
-    macros = get_macros_by_bmi(bmi)
+    for day in days:
+        try:
+            daily_meals = {
+                'breakfast': generate_meal(daily_calories * 0.25, get_macros_by_bmi(bmi)),
+                'lunch': generate_meal(daily_calories * 0.35, get_macros_by_bmi(bmi)),
+                'dinner': generate_meal(daily_calories * 0.30, get_macros_by_bmi(bmi)),
+                'snacks': [
+                    generate_meal(daily_calories * 0.05, get_macros_by_bmi(bmi)),
+                    generate_meal(daily_calories * 0.05, get_macros_by_bmi(bmi))
+                ]
+            }
+            
+            daily_meals['total_calories'] = (
+                daily_meals['breakfast']['total_calories'] +
+                daily_meals['lunch']['total_calories'] +
+                daily_meals['dinner']['total_calories'] +
+                sum(snack['total_calories'] for snack in daily_meals['snacks'])
+            )
+            
+            weekly_plan[day] = daily_meals
+            
+        except Exception as e:
+            print(f"Error generating meal plan for {day}: {e}")
+            weekly_plan[day] = {"error": f"Failed to generate plan for {day}"}
     
-    
-    meals = {
-        'breakfast': generate_meal(daily_calories * 0.25, macros),
-        'lunch': generate_meal(daily_calories * 0.35, macros),
-        'dinner': generate_meal(daily_calories * 0.30, macros),
-        'snacks': [
-            generate_meal(daily_calories * 0.05, macros),
-            generate_meal(daily_calories * 0.05, macros)
-        ]
-    }
-    
-    meals['total_calories'] = sum(
-        meal['total_calories'] 
-        for meal in meals.values() 
-        if isinstance(meal, dict)
-    )
-    
-    return meals
+    return weekly_plan
 
 def get_macros_by_bmi(bmi):
-    """Determine macronutrient ratios based on BMI"""
     if bmi < 18.5:  
         return {'protein': 0.25, 'carbs': 0.50, 'fat': 0.25}
     elif bmi > 25:  
@@ -444,9 +475,9 @@ def generate_meal(calories, macros):
         'total_fat': sum(f['fat'] for f in meal_foods)
     }
 
-@app.route('/api/meal-plan', methods=['GET'])
+@app.route('/api/weekly-meal-plan', methods=['GET'])
 @jwt_required()
-def get_meal_plan():
+def get_weekly_meal_plan():
     try:
         user_email = get_jwt_identity()
         profile = profiles_collection.find_one(
@@ -466,7 +497,7 @@ def get_meal_plan():
             profile['bmi']
         )
         
-        meal_plan = generate_meal_plan(
+        meal_plan = generate_weekly_meal_plan(
             bmi=profile['bmi'],
             daily_calories=daily_calories
         )
@@ -1711,105 +1742,6 @@ def reset_progress():
 
     return jsonify({"message": "Progress reset successfully!"}), 200
 
-
-@app.route("/api/get-fitness-level", methods=["GET"])
-@jwt_required()
-def get_fitness_level():
-    user_email = get_jwt_identity()
-    user_data = db.fitness_assessment.find_one({"user": user_email})
-
-    if not user_data:
-        return jsonify({"error": "No fitness level found. Please complete the assessment first."}), 400
-
-    return jsonify({"fitness_level": user_data["level"]})
-
-@app.route("/api/workout-plan", methods=["GET"])
-@jwt_required()
-def get_workout_plan():
-    user_email = get_jwt_identity()
-
-    user_profile = profiles_collection.find_one({"email": user_email})
-    if not user_profile or "bmi" not in user_profile:
-        return jsonify({"error": "BMI not found. Please complete your profile first."}), 400
-
-    bmi = user_profile["bmi"]
-
-    workout_plans = {
-        "Underweight": [
-            {"day": "Day 1", "workout": "Strength Training: Squats x 15, Push-ups x 10, Plank x 30 sec"},
-            {"day": "Day 2", "workout": "Cardio: Jumping Jacks x 1 min, High Knees x 1 min, Rest x 30 sec"},
-            {"day": "Day 3", "workout": "Strength Training: Lunges x 10, Dumbbell Rows x 10, Side Plank x 20 sec"},
-            {"day": "Day 4", "workout": "Cardio: Jogging in Place x 2 min, Burpees x 10, Rest x 30 sec"},
-            {"day": "Day 5", "workout": "Strength Training: Deadlifts x 10, Shoulder Press x 10, Plank x 30 sec"},
-        ],
-        "Normal": [
-            {"day": "Day 1", "workout": "Cardio: Jump Rope x 2 min, Mountain Climbers x 1 min, Rest x 30 sec"},
-            {"day": "Day 2", "workout": "Strength Training: Squats x 20, Push-ups x 15, Plank x 40 sec"},
-            {"day": "Day 3", "workout": "Cardio: Running x 5 min, High Knees x 1 min, Rest x 30 sec"},
-            {"day": "Day 4", "workout": "Strength Training: Lunges x 15, Dumbbell Rows x 15, Side Plank x 30 sec"},
-            {"day": "Day 5", "workout": "Cardio: Burpees x 15, Jumping Jacks x 1 min, Rest x 30 sec"},
-        ],
-        "Overweight": [
-            {"day": "Day 1", "workout": "Low-Impact Cardio: Walking x 10 min, Step-ups x 10, Rest x 30 sec"},
-            {"day": "Day 2", "workout": "Strength Training: Bodyweight Squats x 15, Wall Push-ups x 10, Plank x 20 sec"},
-            {"day": "Day 3", "workout": "Low-Impact Cardio: Cycling x 10 min, Seated Leg Raises x 10, Rest x 30 sec"},
-            {"day": "Day 4", "workout": "Strength Training: Lunges x 10, Dumbbell Rows x 10, Side Plank x 20 sec"},
-            {"day": "Day 5", "workout": "Low-Impact Cardio: Swimming x 10 min, Step-ups x 10, Rest x 30 sec"},
-        ],
-        "Obese": [
-            {"day": "Day 1", "workout": "Low-Impact Cardio: Walking x 5 min, Chair Squats x 10, Rest x 30 sec"},
-            {"day": "Day 2", "workout": "Strength Training: Seated Leg Raises x 10, Wall Push-ups x 5, Plank x 10 sec"},
-            {"day": "Day 3", "workout": "Low-Impact Cardio: Cycling x 5 min, Step-ups x 5, Rest x 30 sec"},
-            {"day": "Day 4", "workout": "Strength Training: Seated Dumbbell Rows x 10, Chair Squats x 10, Side Plank x 10 sec"},
-            {"day": "Day 5", "workout": "Low-Impact Cardio: Swimming x 5 min, Seated Leg Raises x 10, Rest x 30 sec"},
-        ],
-    }
-
-    if bmi < 18.5:
-        bmi_category = "Underweight"
-    elif 18.5 <= bmi < 25:
-        bmi_category = "Normal"
-    elif 25 <= bmi < 30:
-        bmi_category = "Overweight"
-    else:
-        bmi_category = "Obese"
-
-    workout_plan = workout_plans.get(bmi_category, [])
-
-    return jsonify({
-        "bmi": bmi,
-        "bmi_category": bmi_category,
-        "workout_plan": workout_plan
-    })
-
-@app.route("/api/fitness-assessment", methods=["POST"])
-@jwt_required()
-def fitness_assessment():
-    data = request.json
-    user_email = get_jwt_identity()
-
-    try:
-        pushups = int(data.get("pushups", 0))
-        squats = int(data.get("squats", 0))
-        plank_seconds = int(data.get("plank_seconds", 0))
-
-        if pushups < 10 or squats < 10 or plank_seconds < 20:
-            level = "Beginner 🟢"
-        elif pushups < 20 or squats < 20 or plank_seconds < 40:
-            level = "Intermediate 🟡"
-        else:
-            level = "Advanced 🔴"
-
-        db.fitness_assessment.update_one(
-            {"user": user_email},
-            {"$set": {"level": level, "data": data}},
-            upsert=True
-        )
-
-        return jsonify({"message": "Assessment Completed!", "fitness_level": level}), 200
-
-    except ValueError:
-        return jsonify({"error": "Invalid input! Please enter numeric values."}), 400
 
 @app.route("/api/post-badge", methods=["POST"])
 @jwt_required()
