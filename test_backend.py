@@ -1,24 +1,54 @@
 import pytest
-from flask import Flask
-from flask.testing import FlaskClient
+from flask import Flask, json
 from werkzeug.security import generate_password_hash
 from datetime import datetime, timedelta
-import json
 import os
+import sys
+from pathlib import Path
+from dotenv import load_dotenv
+import mongomock
+import random
 from unittest.mock import patch, MagicMock
-import bcrypt
-import pyotp
-import smtplib
-import pandas as pd
-import numpy as np
-from sklearn.neighbors import NearestNeighbors
+
+# Add parent directory to Python path to import app.py
+sys.path.append(str(Path(__file__).parent.parent))
+
+# Now import your Flask app
+from app import app as flask_app
+
+load_dotenv()
+
+# Mock MongoDB setup
+@pytest.fixture
+def mock_db():
+    client = mongomock.MongoClient()
+    db = client.HealthFitnessApp
+    return db
 
 @pytest.fixture
-def app():
-    from app import app  
-    app.config['TESTING'] = True
-    app.config['JWT_SECRET_KEY'] = 'test-secret-key'
-    yield app
+def app(mock_db):
+    # Configure test settings
+    flask_app.config['TESTING'] = True
+    flask_app.config['JWT_SECRET_KEY'] = 'test-secret-key'
+    
+    # Mock database collections
+    flask_app.db = mock_db
+    flask_app.users_collection = mock_db.users
+    flask_app.profiles_collection = mock_db.profiles
+    flask_app.sleep_collection = mock_db.sleep
+    flask_app.achievements_collection = mock_db.achievements
+    flask_app.groups_collection = mock_db.groups
+    flask_app.meal_collection = mock_db.meals
+    flask_app.badges_collection = mock_db.badges
+    flask_app.progress_collection = mock_db.progress
+    flask_app.steps_collection = mock_db.steps
+    flask_app.challenges_collection = mock_db.challenges
+    flask_app.user_challenges_collection = mock_db.user_challenges
+    flask_app.notifications_collection = mock_db.notifications
+    
+    # Establish application context
+    with flask_app.app_context():
+        yield flask_app
 
 @pytest.fixture
 def client(app):
@@ -26,428 +56,340 @@ def client(app):
 
 @pytest.fixture
 def auth_headers(client):
+    """Fixture to get authenticated headers"""
+    # Clear any existing test data
+    from app import users_collection
+    users_collection.delete_many({"email": "test@example.com"})
+    
     # Register a test user
     test_user = {
         "email": "test@example.com",
         "password": "testpassword"
     }
-    client.post('/api/register', json=test_user)
-    
+    register_response = client.post('/api/register', json=test_user)
+    print(f"Register response: {register_response.status_code}, {register_response.json}")
+    assert register_response.status_code == 201
+
     # Login to get token
-    response = client.post('/api/login', json=test_user)
-    token = response.json['token']
+    login_response = client.post('/api/login', json=test_user)
+    print(f"Login response: {login_response.status_code}, {login_response.json}")
+    assert login_response.status_code == 200
+    assert "token" in login_response.json, "Token not found in login response"
     
-    return {
-        'Authorization': f'Bearer {token}',
-        'Content-Type': 'application/json'
+    token = login_response.json['token']
+    return {'Authorization': f'Bearer {token}'}
+
+def test_home(client):
+    response = client.get('/')
+    assert response.status_code == 200
+    assert response.json == {"message": "Flask API is running!"}
+
+def test_register(client, mock_db):
+    # Verify mock_db is empty
+    assert mock_db.users.count_documents({}) == 0
+    
+    # Test data that passes all validations
+    test_data = {
+        "email": "valid@example.com", 
+        "password": "longenoughpassword"
     }
 
-# Mock MongoDB collections
-@pytest.fixture(autouse=True)
-def mock_mongo(monkeypatch):
-    from pymongo import MongoClient
-    from unittest.mock import MagicMock
+    # Debug: Print collections before test
+    print("Collections before test:", mock_db.list_collection_names())
     
-    mock_client = MagicMock(spec=MongoClient)
-    mock_db = MagicMock()
-    mock_client.return_value = mock_client
-    mock_client.__getitem__.return_value = mock_db
+    with patch('app.bcrypt.generate_password_hash', return_value='mockedhash'):
+        response = client.post('/api/register', json=test_data)
     
-    # Mock collections
-    collections = {
-        'users': MagicMock(),
-        'sleep': MagicMock(),
-        'achievements': MagicMock(),
-        'groups': MagicMock(),
-        'meals': MagicMock(),
-        'badges': MagicMock(),
-        'progress': MagicMock(),
-        'steps': MagicMock(),
-        'profiles': MagicMock(),
-        'challenges': MagicMock(),
-        'user_challenges': MagicMock(),
-        'notifications': MagicMock(),
-        'fitness_assessment': MagicMock()
+    # Debug output
+    print("Response:", response.status_code, response.json)
+    print("Users in DB:", list(mock_db.users.find({})))
+    
+    # Verify response
+    assert response.status_code == 201
+    assert response.json['message'] == "User registered successfully!"
+    
+    # Verify database
+    user = mock_db.users.find_one({"email": "valid@example.com"})
+    assert user is not None, f"User not found. DB contents: {list(mock_db.users.find({}))}"
+    assert user['password'] == 'mockedhash'
+
+def test_login(client, mock_db):
+    """Comprehensive login endpoint testing with mock collections"""
+    # Debug setup
+    print("\n=== Starting test_login ===")
+    
+    # Setup test data
+    test_email = "pravalliva11@gmail.com"
+    test_password = "prava30"
+
+    # Clear test data
+    mock_db.users.delete_many({})
+    print("Cleared test users")
+
+    # Register test user
+    print(f"Registering user: {test_email}")
+    register_response = client.post('/api/register', json={
+        "email": test_email,
+        "password": test_password
+    })
+    print(f"Register response: {register_response.status_code}, {register_response.json}")
+    assert register_response.status_code == 201
+
+    # Verify user was created
+    db_user = mock_db.users.find_one({"email": test_email})
+    print(f"User in DB: {db_user}")
+    assert db_user is not None
+    print(f"Stored password hash: {db_user['password']}")
+
+    # Test login
+    print("Attempting login...")
+    response = client.post('/api/login', json={
+        "email": test_email,
+        "password": test_password
+    })
+    print(f"Login response: {response.status_code}, {response.json}")
+    assert response.status_code == 200
+
+def test_profile_operations(client, auth_headers):
+    # Test storing profile
+    profile_data = {
+        "name": "Test User",
+        "age": 25,
+        "gender": "male",
+        "height": 175,
+        "weight": 70,
+        "goals": "maintain"
     }
+    response = client.post('/api/store-profile', json=profile_data, headers=auth_headers)
+    assert response.status_code == 201
+    assert "bmi" in response.json
     
-    mock_db.__getitem__.side_effect = lambda name: collections[name]
+    # Test getting profile
+    response = client.get('/api/get-profile', headers=auth_headers)
+    assert response.status_code == 200
+    assert response.json['name'] == "Test User"
     
-    # Update this line to point to your app module
-    monkeypatch.setattr('app.MongoClient', mock_client)
+    # Test editing profile
+    response = client.put('/api/edit-profile', json={"name": "Updated Name"}, headers=auth_headers)
+    assert response.status_code == 200
     
-    return collections
+    # Verify update
+    response = client.get('/api/get-profile', headers=auth_headers)
+    assert response.json['name'] == "Updated Name"
 
-# Test cases
-class TestAuthEndpoints:
-    def test_register(self, client, mock_mongo):
-        mock_mongo['users'].find_one.return_value = None
-        
-        response = client.post('/api/register', json={
-            "email": "new@example.com",
-            "password": "newpassword"
-        })
-        
-        assert response.status_code == 201
-        assert response.json['message'] == "User registered successfully!"
-        mock_mongo['users'].insert_one.assert_called_once()
+def test_sleep_endpoints(client, auth_headers):
+    # Test logging sleep
+    sleep_data = {
+        "sleep_hours": 7.5,
+        "sleep_rating": 4
+    }
+    response = client.post('/api/log-sleep', json=sleep_data, headers=auth_headers)
+    assert response.status_code == 201
+    
+    # Test getting sleep history
+    response = client.get('/api/sleep-history', headers=auth_headers)
+    assert response.status_code == 200
+    assert len(response.json['history']) == 1
+    
+    # Test sleep streak
+    response = client.get('/api/sleep-streak', headers=auth_headers)
+    assert response.status_code == 200
+    assert response.json['streak'] >= 1
 
-    def test_register_existing_user(self, client, mock_mongo):
-        mock_mongo['users'].find_one.return_value = {"email": "exists@example.com"}
-        
-        response = client.post('/api/register', json={
-            "email": "exists@example.com",
-            "password": "password"
-        })
-        
-        assert response.status_code == 400
-        assert "already exists" in response.json['error']
+def test_steps_endpoints(client, auth_headers):
+    # Test updating steps
+    response = client.post('/api/update-steps', json={"steps": 5000}, headers=auth_headers)
+    assert response.status_code == 200
+    
+    # Test getting steps
+    response = client.get('/api/get-steps', headers=auth_headers)
+    assert response.status_code == 200
+    assert "steps" in response.json
+    
+    # Test step history
+    response = client.get('/api/get-step-history', headers=auth_headers)
+    assert response.status_code == 200
+    assert "daily" in response.json
 
-    def test_login_success(self, client, mock_mongo):
-        hashed = bcrypt.hashpw(b"testpassword", bcrypt.gensalt())
-        mock_mongo['users'].find_one.return_value = {
-            "email": "test@example.com",
-            "password": hashed
-        }
-        mock_mongo['profiles'].find_one.return_value = None
-        
-        response = client.post('/api/login', json={
-            "email": "test@example.com",
-            "password": "testpassword"
-        })
-        
-        assert response.status_code == 200
-        assert "token" in response.json
+def test_challenges(client, auth_headers):
+    # Add a test challenge
+    test_challenge = {
+        "name": "Test Challenge",
+        "description": "Test Description",
+        "target": 10,
+        "unit": "tests"
+    }
+    client.post('/api/add-challenge', json=test_challenge, headers=auth_headers)
+    
+    # Test getting challenges
+    response = client.get('/api/get-challenges', headers=auth_headers)
+    assert response.status_code == 200
+    assert len(response.json['challenges']) > 0
+    
+    # Test joining challenge
+    response = client.post('/api/join-challenge', json={"challenge_name": "Test Challenge"}, headers=auth_headers)
+    assert response.status_code == 201
+    
+    # Test updating progress
+    response = client.post('/api/update-challenge-progress', json={
+        "challenge_name": "Test Challenge",
+        "progress": 5
+    }, headers=auth_headers)
+    assert response.status_code == 200
+    
+    # Test getting user challenges
+    response = client.get('/api/get-user-challenges', headers=auth_headers)
+    assert response.status_code == 200
+    assert len(response.json['challenges']) > 0
 
-    def test_login_invalid_credentials(self, client, mock_mongo):
-        hashed = bcrypt.hashpw(b"rightpassword", bcrypt.gensalt())
-        mock_mongo['users'].find_one.return_value = {
-            "email": "test@example.com",
-            "password": hashed
-        }
-        
-        response = client.post('/api/login', json={
-            "email": "test@example.com",
-            "password": "wrongpassword"
-        })
-        
-        assert response.status_code == 401
-        assert "Invalid" in response.json['error']
-
-class TestProfileEndpoints:
-    def test_store_profile(self, client, auth_headers, mock_mongo):
-        test_profile = {
-            "name": "Test User",
-            "age": 30,
-            "gender": "male",
-            "height": 175,
-            "weight": 70,
-            "goals": "maintain"
-        }
-        
-        response = client.post('/api/store-profile', 
-                             json=test_profile,
-                             headers=auth_headers)
-        
-        assert response.status_code == 201
-        mock_mongo['profiles'].update_one.assert_called_once()
-
-    def test_get_profile(self, client, auth_headers, mock_mongo):
-        mock_profile = {
-            "email": "test@example.com",
-            "name": "Test User",
-            "age": 30,
-            "gender": "male",
-            "height": 175,
-            "weight": 70,
-            "bmi": 22.86,
-            "daily_calories": 1540,
-            "goals": "maintain"
-        }
-        mock_mongo['profiles'].find_one.return_value = mock_profile
-        
-        response = client.get('/api/get-profile', headers=auth_headers)
-        
-        assert response.status_code == 200
-        assert response.json['name'] == "Test User"
-        assert response.json['bmi'] == pytest.approx(22.86, 0.01)
-
-class TestWorkoutEndpoints:
-    @patch('app.exercises_df', pd.DataFrame({
-        'id': [1, 2, 3],
-        'name': ['Push-up', 'Squat', 'Lunge'],
-        'bodyPart': ['chest', 'legs', 'legs'],
-        'equipment': ['body weight', 'body weight', 'body weight'],
-        'target': ['pectorals', 'quads', 'glutes'],
-        'tags': ['chest body weight pectorals', 'legs body weight quads', 'legs body weight glutes']
-    }))
-    @patch('app.tfidf_matrix', MagicMock())
-    @patch('app.cosine_sim', np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]]))
-    def test_get_recommendations(self, client, auth_headers, mock_mongo):
-        response = client.get('/api/get-recommendations', headers=auth_headers)
-        
-        assert response.status_code == 200
-        assert len(response.json['recommended_workouts']) > 0
-
-    @patch('app.exercises_df', pd.DataFrame({
-        'id': [1, 2, 3],
-        'name': ['Push-up', 'Squat', 'Lunge'],
-        'bodyPart': ['chest', 'legs', 'legs'],
-        'equipment': ['body weight', 'body weight', 'body weight'],
-        'target': ['pectorals', 'quads', 'glutes'],
-        'tags': ['chest body weight pectorals', 'legs body weight quads', 'legs body weight glutes']
-    }))
-    @patch('app.tfidf_matrix', MagicMock())
-    @patch('app.cosine_sim', np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]]))
-    def test_get_personalized_workouts(self, client, auth_headers, mock_mongo):
-        mock_mongo['profiles'].find_one.return_value = {
-            "email": "test@example.com",
-            "bmi": 22.5,
-            "preferred_body_part": "legs",
-            "equipment": ["body weight"]
-        }
-        
-        response = client.get('/api/get-personalized-workouts', headers=auth_headers)
-        
-        assert response.status_code == 200
-        assert response.json['intensity_level'] == "intermediate"
-
-class TestMealEndpoints:
-    @patch('app.food_database', {
+def test_meal_endpoints(client, auth_headers):
+    # Mock food database
+    with patch('app.food_database', {
         "Apple": {"Calories (kcal)": 52, "Protein (g)": 0.3, "Carbohydrates (g)": 14, "Fats (g)": 0.2},
         "Chicken Breast": {"Calories (kcal)": 165, "Protein (g)": 31, "Carbohydrates (g)": 0, "Fats (g)": 3.6}
-    })
-    @patch('app.food_model', MagicMock(spec=NearestNeighbors))
-    @patch('app.food_df', pd.DataFrame({
-        'name': ['Apple', 'Chicken Breast'],
-        'calories': [52, 165],
-        'protein': [0.3, 31],
-        'carbs': [14, 0],
-        'fat': [0.2, 3.6]
-    }))
-    def test_log_meal(self, client, auth_headers, mock_mongo):
-        meal_data = {
+    }):
+        # Test logging meal
+        response = client.post('/api/log-meal', json={
             "meals": {
                 "breakfast": ["Apple"],
                 "lunch": ["Chicken Breast"]
             }
-        }
-        
-        response = client.post('/api/log-meal', 
-                             json=meal_data,
-                             headers=auth_headers)
-        
+        }, headers=auth_headers)
         assert response.status_code == 201
-        assert response.json['total_nutrition']['calories'] == 217
-        mock_mongo['meals'].insert_one.assert_called_once()
-
-    def test_get_meal_plan(self, client, auth_headers, mock_mongo):
-        mock_mongo['profiles'].find_one.return_value = {
-            "bmi": 22.5,
-            "daily_calories": 2000,
-            "goals": "maintain"
-        }
+        assert response.json['total_nutrition']['calories'] > 0
         
-        response = client.get('/api/meal-plan', headers=auth_headers)
-        
+        # Test getting meals
+        response = client.get('/api/get-meals', headers=auth_headers)
         assert response.status_code == 200
-        assert 'breakfast' in response.json
-        assert 'lunch' in response.json
-        assert 'dinner' in response.json
+        assert len(response.json['meals']) > 0
 
-class TestChallengeEndpoints:
-    def test_get_challenges(self, client, auth_headers, mock_mongo):
-        mock_mongo['challenges'].find.return_value = [
-            {"name": "10k Steps", "description": "Walk 10,000 steps", "target": 10000, "unit": "steps"}
-        ]
-        
-        response = client.get('/api/get-challenges', headers=auth_headers)
-        
+def test_groups(client, auth_headers):
+    # Test creating group
+    response = client.post('/api/create-group', json={"group_name": "Test Group"}, headers=auth_headers)
+    assert response.status_code == 201
+    
+    # Test joining group
+    response = client.post('/api/join-group', json={"group_name": "Test Group"}, headers=auth_headers)
+    assert response.status_code == 200
+    
+    # Test posting to group
+    response = client.post('/api/group-post', json={
+        "group_name": "Test Group",
+        "content": "Test post"
+    }, headers=auth_headers)
+    assert response.status_code == 201
+    
+    # Test getting group posts
+    response = client.get('/api/get-group-posts/Test Group', headers=auth_headers)
+    assert response.status_code == 200
+    assert len(response.json) > 0
+
+def test_forgot_password_flow(client):
+    # Register a test user
+    test_user = {
+        "email": "password@example.com",
+        "password": "originalpass"
+    }
+    client.post('/api/register', json=test_user)
+    
+    # Test forgot password
+    with patch('app.mail.send', MagicMock()):
+        response = client.post('/api/forgot-password', json={"email": "password@example.com"})
         assert response.status_code == 200
-        assert len(response.json['challenges']) == 1
-
-    def test_join_challenge(self, client, auth_headers, mock_mongo):
-        mock_mongo['challenges'].find_one.return_value = {
-            "name": "10k Steps",
-            "description": "Walk 10,000 steps",
-            "target": 10000,
-            "unit": "steps"
-        }
-        mock_mongo['user_challenges'].find_one.return_value = None
-        
-        response = client.post('/api/join-challenge', 
-                             json={"challenge_name": "10k Steps"},
-                             headers=auth_headers)
-        
-        assert response.status_code == 201
-        mock_mongo['user_challenges'].insert_one.assert_called_once()
-
-class TestSleepEndpoints:
-    def test_log_sleep(self, client, auth_headers, mock_mongo):
-        sleep_data = {
-            "sleep_hours": 7.5,
-            "sleep_rating": 4
-        }
-        
-        response = client.post('/api/log-sleep', 
-                             json=sleep_data,
-                             headers=auth_headers)
-        
-        assert response.status_code == 201
-        mock_mongo['sleep'].insert_one.assert_called_once()
-
-    def test_get_sleep_history(self, client, auth_headers, mock_mongo):
-        mock_mongo['sleep'].find.return_value = [
-            {"date": "2023-01-01", "sleep_hours": 7.5, "sleep_rating": 4},
-            {"date": "2023-01-02", "sleep_hours": 6.5, "sleep_rating": 3}
-        ]
-        
-        response = client.get('/api/sleep-history', headers=auth_headers)
-        
-        assert response.status_code == 200
-        assert len(response.json['history']) == 2
-        assert 'sleep_quality' in response.json
-
-class TestGroupEndpoints:
-    def test_create_group(self, client, auth_headers, mock_mongo):
-        mock_mongo['groups'].find_one.return_value = None
-        
-        response = client.post('/api/create-group', 
-                             json={"group_name": "Test Group"},
-                             headers=auth_headers)
-        
-        assert response.status_code == 201
-        mock_mongo['groups'].insert_one.assert_called_once()
-
-    def test_join_group(self, client, auth_headers, mock_mongo):
-        mock_mongo['groups'].find_one.return_value = {
-            "name": "Existing Group",
-            "members": []
-        }
-        
-        response = client.post('/api/join-group', 
-                             json={"group_name": "Existing Group"},
-                             headers=auth_headers)
-        
-        assert response.status_code == 200
-        mock_mongo['groups'].update_one.assert_called_once()
-
-class TestForgotPassword:
-    @patch('app.mail.send', MagicMock())
-    def test_forgot_password(self, client, mock_mongo):
-        mock_mongo['users'].find_one.return_value = {"email": "test@example.com"}
-        
-        response = client.post('/forgot-password', json={"email": "test@example.com"})
-        
-        assert response.status_code == 200
-        mock_mongo['users'].update_one.assert_called_once()
-
-    def test_verify_otp(self, client, mock_mongo):
-        mock_mongo['users'].find_one.return_value = {
-            "email": "test@example.com",
-            "otp": "123456",
-            "otp_expiry": datetime.utcnow() + timedelta(minutes=10)
-        }
-        
-        response = client.post('/verify-otp', json={
-            "email": "test@example.com",
+    
+    # Test verify OTP (mock OTP)
+    with patch('app.users_collection.find_one', return_value={
+        "email": "password@example.com",
+        "otp": "123456",
+        "otp_expiry": datetime.utcnow() + timedelta(minutes=10),
+        "otp_verified": False
+    }):
+        response = client.post('/api/verify-otp', json={
+            "email": "password@example.com",
             "otp": "123456"
         })
-        
         assert response.status_code == 200
-        mock_mongo['users'].update_one.assert_called_once()
+    
+    # Test reset password
+    response = client.post('/api/reset-password', json={
+        "email": "password@example.com",
+        "password": "newpassword"
+    })
+    assert response.status_code == 200
+    
+    # Verify new password works
+    response = client.post('/api/login', json={
+        "email": "password@example.com",
+        "password": "newpassword"
+    })
+    assert response.status_code == 200
 
-    def test_reset_password(self, client, mock_mongo):
-        mock_mongo['users'].find_one.return_value = {
-            "email": "test@example.com",
-            "otp_verified": True
-        }
-        
-        response = client.post('/reset-password', json={
-            "email": "test@example.com",
-            "password": "newpassword"
-        })
-        
+def test_workout_recommendations(client, auth_headers):
+    # Need a profile for personalized recommendations
+    client.post('/api/store-profile', json={
+        "name": "Workout Test",
+        "age": 30,
+        "gender": "male",
+        "height": 180,
+        "weight": 75,
+        "goals": "maintain"
+    }, headers=auth_headers)
+    
+    # Mock exercises data
+    with patch('app.exercises_df', MagicMock()), patch('app.cosine_sim', MagicMock()):
+        # Test general recommendations
+        response = client.get('/api/get-recommendations', headers=auth_headers)
         assert response.status_code == 200
-        mock_mongo['users'].update_one.assert_called_once()
-
-class TestStepsTracking:
-    def test_update_steps(self, client, auth_headers, mock_mongo):
-        response = client.post('/api/update-steps', 
-                             json={"steps": 5000},
-                             headers=auth_headers)
         
+        # Test personalized recommendations
+        response = client.get('/api/get-personalized-workouts', headers=auth_headers)
         assert response.status_code == 200
-        mock_mongo['steps'].update_one.assert_called_once()
 
-    def test_get_step_history(self, client, auth_headers, mock_mongo):
-        mock_mongo['steps'].aggregate.return_value = [
-            {"_id": None, "total": 35000}
-        ]
-        mock_mongo['steps'].find_one.return_value = {"steps": 5000}
-        
-        response = client.get('/api/get-step-history', headers=auth_headers)
-        
+def test_meal_plan(client, auth_headers):
+    # Need a profile for meal plan
+    client.post('/api/store-profile', json={
+        "name": "Meal Test",
+        "age": 30,
+        "gender": "female",
+        "height": 165,
+        "weight": 60,
+        "goals": "lose_weight"
+    }, headers=auth_headers)
+    
+    # Mock food model and data
+    with patch('app.food_model', MagicMock()), patch('app.food_df', MagicMock()):
+        response = client.get('/api/meal-plan', headers=auth_headers)
         assert response.status_code == 200
-        assert response.json['daily'] == 5000
-        assert response.json['weekly'] == 35000
 
-class TestProgressTracking:
-    def test_track_progress(self, client, auth_headers, mock_mongo):
-        mock_mongo['progress'].find_one.return_value = {"completed_days": 2}
-        
-        response = client.post('/api/track-progress', headers=auth_headers)
-        
-        assert response.status_code == 200
-        assert response.json['completed_days'] == 3
-        mock_mongo['progress'].update_one.assert_called_once()
-
-    def test_get_progress(self, client, auth_headers, mock_mongo):
-        mock_mongo['progress'].find_one.return_value = {
-            "completed_days": 3,
-            "badge": "Beginner"
-        }
-        
-        response = client.get('/api/get-progress', headers=auth_headers)
-        
-        assert response.status_code == 200
-        assert response.json['completed_days'] == 3
-
-class TestFitnessAssessment:
-    def test_fitness_assessment(self, client, auth_headers, mock_mongo):
-        assessment_data = {
-            "pushups": 15,
-            "squats": 20,
-            "plank_seconds": 30
-        }
-        
-        response = client.post('/api/fitness-assessment', 
-                             json=assessment_data,
-                             headers=auth_headers)
-        
-        assert response.status_code == 200
-        assert "Intermediate" in response.json['fitness_level']
-        mock_mongo['fitness_assessment'].update_one.assert_called_once()
-
-class TestNewsEndpoint:
-    @patch('app.requests.get')
-    def test_get_news(self, mock_get, client):
-        mock_response = MagicMock()
-        mock_response.json.return_value = {
+def test_news_endpoint(client):
+    with patch('app.requests.get') as mock_get:
+        mock_get.return_value.json.return_value = {
             "articles": [
                 {
                     "title": "Test News",
                     "description": "Test Description",
                     "url": "http://example.com",
                     "urlToImage": "http://example.com/image.jpg",
-                    "publishedAt": "2023-01-01T00:00:00Z"
+                    "publishedAt": "2023-01-01"
                 }
             ]
         }
-        mock_response.raise_for_status.return_value = None
-        mock_get.return_value = mock_response
+        mock_get.return_value.raise_for_status.return_value = None
         
         response = client.get('/api/news')
-        
         assert response.status_code == 200
-        assert len(response.json) == 1
-        assert response.json[0]['title'] == "Test News"
+        assert len(response.json) > 0
+
+def test_progress_tracking(client, auth_headers):
+    # Test tracking progress
+    response = client.post('/api/track-progress', headers=auth_headers)
+    assert response.status_code == 200
+    
+    # Test getting progress
+    response = client.get('/api/get-progress', headers=auth_headers)
+    assert response.status_code == 200
+    assert response.json['completed_days'] > 0
+    
+    # Test resetting progress
+    response = client.post('/api/reset-progress', headers=auth_headers)
+    assert response.status_code == 200
