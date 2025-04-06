@@ -15,4 +15,3 @@ pandas
 numpy
 Flask-Mail
 flask-bcrypt
-openai
