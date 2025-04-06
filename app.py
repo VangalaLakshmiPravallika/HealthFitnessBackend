@@ -2,7 +2,7 @@ import os
 import pandas as pd
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from flask_jwt_extended import create_access_token, jwt_required, JWTManager, get_jwt_identity
+from flask_jwt_extended import create_access_token, jwt_required, JWTManager, get_jwt_identity,verify_jwt_in_request
 from flask_bcrypt import Bcrypt
 from pymongo import MongoClient
 from dotenv import load_dotenv
@@ -219,7 +219,6 @@ def format_gif_url(exercise_id):
 @app.route("/api/get-recommendations", methods=["GET"])
 @jwt_required()
 def get_recommendations():
-    """General workout recommendations for all users"""
     try:
         if exercises_df.empty:
             raise Exception("Exercise data not loaded")
@@ -241,7 +240,6 @@ def get_recommendations():
 @app.route("/api/get-personalized-workouts", methods=["GET"])
 @jwt_required()
 def get_personalized_workouts():
-    """Personalized recommendations based on user profile"""
     try:
         if exercises_df.empty or cosine_sim is None:
             raise Exception("Exercise data not loaded")
@@ -653,7 +651,7 @@ def get_news():
 @app.route("/api/join-challenge", methods=["POST"])
 @jwt_required()
 def join_challenge():
-    data = request.json
+    data = request.get_json(force=True)  
     user_email = get_jwt_identity()
     challenge_name = data.get("challenge_name")
 
@@ -666,7 +664,7 @@ def join_challenge():
 
     existing_entry = user_challenges_collection.find_one({"email": user_email, "challenge_name": challenge_name})
     if existing_entry:
-        return jsonify({"message": "You have already joined this challenge"}), 200
+        return jsonify({"message": "You have already joined this challenge"}), 400
 
     user_challenges_collection.insert_one({
         "email": user_email,
@@ -678,7 +676,6 @@ def join_challenge():
     })
 
     return jsonify({"message": f"Joined challenge: {challenge_name}"}), 201
-
 
 @app.route("/api/update-challenge-progress", methods=["POST"])
 @jwt_required()
@@ -760,7 +757,6 @@ def get_user_challenges():
 @jwt_required()
 def get_leaderboard(challenge_name):
     try:
-        # Get all entries for this challenge
         leaderboard = list(user_challenges_collection.find(
             {"challenge_name": challenge_name}, 
             {"_id": 0, "email": 1, "progress": 1}
@@ -769,17 +765,14 @@ def get_leaderboard(challenge_name):
         if not leaderboard:
             return jsonify({"message": "No entries found for this challenge", "leaderboard": []}), 200
 
-        # Sort by progress (descending)
         leaderboard_sorted = sorted(leaderboard, key=lambda x: x["progress"], reverse=True)
 
-        # Add usernames
         for entry in leaderboard_sorted:
             user = users_collection.find_one(
                 {"email": entry["email"]}, 
                 {"_id": 0, "username": 1}
             )
             entry["username"] = user.get("username", entry["email"]) if user else entry["email"]
-            # Remove email if you want to keep it private
             del entry["email"]
 
         return jsonify({"leaderboard": leaderboard_sorted}), 200
@@ -829,7 +822,7 @@ def add_challenge():
 
     challenges_collection.insert_one(new_challenge)
 
-    return jsonify({"message": "New challenge added!", "challenge": new_challenge}), 2011
+    return jsonify({"message": "New challenge added!", "challenge": new_challenge}), 201
 
 @app.route("/api/store-profile", methods=["POST"])
 @jwt_required()
@@ -951,19 +944,23 @@ def get_bmi():
 
     return jsonify({"bmi": user["bmi"]}), 200
 
-@app.route("/api/register",methods=["POST"])
+@app.route("/api/register", methods=["POST"])
 def register():
-    data=request.json
-    email=data.get("email")
-    password=data.get("password")
+    data = request.json
+    email = data.get("email")
+    password = data.get("password")
 
-    if users_collection.find_one({"email":email}):
-        return jsonify({"error":"User already exists"}),400
+    if users_collection.find_one({"email": email}):
+        return jsonify({"error": "User already exists"}), 400
 
-    hashed_password=bcrypt.hashpw(password.encode('utf-8'),bcrypt.gensalt())
-    users_collection.insert_one({"email":email,"password":hashed_password})
-    
-    return jsonify({"message":"User registered successfully!"}),201
+    hashed_password = bcrypt.generate_password_hash(password).decode('utf-8')
+
+    users_collection.insert_one({
+        "email": email,
+        "password": hashed_password
+    })
+
+    return jsonify({"message": "User registered successfully"}), 201
 
 @app.route("/api/login", methods=["POST"])
 def login():
@@ -985,15 +982,15 @@ def login():
     try:
         if not bcrypt.checkpw(password.encode('utf-8'), stored_password):
             return jsonify({"error": "Invalid email or password"}), 401
-    except Exception as e:
+    except Exception:
         try:
             if not bcrypt.check_password_hash(stored_password, password.encode('utf-8')):
                 return jsonify({"error": "Invalid email or password"}), 401
-        except Exception as e:
+        except Exception:
             return jsonify({"error": "Authentication error"}), 500
 
     profile = profiles_collection.find_one({"email": email})
-    profile_complete = (
+    profile_complete = bool(
         profile
         and profile.get("name")
         and profile.get("age")
@@ -1009,6 +1006,7 @@ def login():
         "token": token,
         "profileComplete": profile_complete
     }), 200
+
 
 otp_store = {}
 
