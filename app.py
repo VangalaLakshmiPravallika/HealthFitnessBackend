@@ -21,6 +21,7 @@ from sklearn.neighbors import NearestNeighbors
 import random
 from flask_mail import Mail, Message
 from werkzeug.security import generate_password_hash
+import openai
 
 
 print("✅ Flask is using Python:", sys.executable)
@@ -33,6 +34,7 @@ except ImportError:
 
 NEWS_API_KEY = os.getenv("NEWS_API_KEY")  
 NEWS_API_URL = "https://newsapi.org/v2/everything"
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
 load_dotenv()
 
@@ -78,6 +80,28 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from flask import jsonify
 from pymongo import MongoClient
+
+@app.route("/chat", methods=["POST"])
+def chat():
+    data = request.json
+    user_message = data.get("message", "")
+
+    if not user_message:
+        return jsonify({"error": "No message provided"}), 400
+
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant that only answers health, fitness, and sleep questions."},
+                {"role": "user", "content": user_message},
+            ],
+            temperature=0.7,
+        )
+        reply = response.choices[0].message.content.strip()
+        return jsonify({"response": reply})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.route('/forgot-password', methods=['POST'])
 def forgot_password():
