@@ -412,27 +412,30 @@ def calculate_calorie_needs(bmi, weight_kg, activity_level):
     else:
         return base_calories * activity_multiplier  
 
-def generate_weekly_meal_plan(bmi, daily_calories):
-    weekly_plan = {}
-    for day in range(1, 8):  # 7 days
-        daily_plan = {
-            'breakfast': generate_meal(daily_calories * 0.25, get_macros_by_bmi(bmi)),
-            'lunch': generate_meal(daily_calories * 0.35, get_macros_by_bmi(bmi)),
-            'dinner': generate_meal(daily_calories * 0.30, get_macros_by_bmi(bmi)),
-            'snacks': [
-                generate_meal(daily_calories * 0.05, get_macros_by_bmi(bmi)),
-                generate_meal(daily_calories * 0.05, get_macros_by_bmi(bmi))
-            ]
-        }
-        daily_plan['total_calories'] = (
-            daily_plan['breakfast']['total_calories'] +
-            daily_plan['lunch']['total_calories'] +
-            daily_plan['dinner']['total_calories'] +
-            sum(snack['total_calories'] for snack in daily_plan['snacks'])
-        )
-        weekly_plan[f'Day {day}'] = daily_plan
-    return weekly_plan
-
+def generate_meal_plan(bmi, daily_calories):
+    if not food_model or food_df.empty:
+        raise ValueError("Food database not initialized")
+    
+    macros = get_macros_by_bmi(bmi)
+    
+    
+    meals = {
+        'breakfast': generate_meal(daily_calories * 0.25, macros),
+        'lunch': generate_meal(daily_calories * 0.35, macros),
+        'dinner': generate_meal(daily_calories * 0.30, macros),
+        'snacks': [
+            generate_meal(daily_calories * 0.05, macros),
+            generate_meal(daily_calories * 0.05, macros)
+        ]
+    }
+    
+    meals['total_calories'] = sum(
+        meal['total_calories'] 
+        for meal in meals.values() 
+        if isinstance(meal, dict)
+    )
+    
+    return meals
 
 def get_macros_by_bmi(bmi):
     """Determine macronutrient ratios based on BMI"""
@@ -490,13 +493,13 @@ def get_meal_plan():
             profile['bmi']
         )
         
-        meal_plan = generate_weekly_meal_plan(
+        meal_plan = generate_meal_plan(
             bmi=profile['bmi'],
             daily_calories=daily_calories
         )
         
         if not meal_plan:
-            return jsonify({"error": "Failed to generate weekly meal plan"}), 500
+            return jsonify({"error": "Failed to generate meal plan"}), 500
             
         return jsonify(meal_plan)
         
@@ -505,7 +508,6 @@ def get_meal_plan():
             "error": "Internal server error",
             "message": str(e)
         }), 500
-
 
 def adjust_calories_by_goal(base_calories, goal, bmi):
     if goal == "lose_weight" or bmi > 25:
