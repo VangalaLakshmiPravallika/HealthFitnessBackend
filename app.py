@@ -243,7 +243,7 @@ def get_personalized_workouts():
     try:
         if exercises_df.empty or cosine_sim is None:
             raise Exception("Exercise data not loaded")
-            
+        
         user_email = get_jwt_identity()
         user = profiles_collection.find_one({"email": user_email})
         
@@ -252,13 +252,14 @@ def get_personalized_workouts():
                 "success": False,
                 "error": "BMI not found. Please update your profile."
             }), 400
-        
+
         bmi = user["bmi"]
         intensity = get_intensity_level(bmi)
         preferred_body_part = user.get("preferred_body_part", "all")
         equipment_available = user.get("equipment", ["body weight"])
-        filtered_exercises = exercises_df.copy()
         
+        filtered_exercises = exercises_df.copy()
+
         if intensity == 'beginner':
             filtered_exercises = filtered_exercises[~filtered_exercises['name'].str.contains('advanced|pro', case=False)]
         elif intensity == 'low-impact':
@@ -266,37 +267,66 @@ def get_personalized_workouts():
         
         if preferred_body_part != "all":
             filtered_exercises = filtered_exercises[filtered_exercises['bodyPart'] == preferred_body_part]
-        
+
         filtered_exercises = filtered_exercises[filtered_exercises['equipment'].isin(equipment_available)]
-        
-        if 'workout_history' in user:
-            try:
-                history = pd.DataFrame(user['workout_history'])
-                top_exercises = history['exerciseId'].value_counts().head(3).index.tolist()
-                
-                similar_exercises = set()
-                for ex_id in top_exercises:
-                    idx = exercises_df[exercises_df['id'] == ex_id].index[0]
-                    sim_scores = list(enumerate(cosine_sim[idx]))
-                    sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)
-                    similar_exercises.update([i[0] for i in sim_scores[1:4]])
-                
-                recommended_indices = list(similar_exercises)
-            except:
-                recommended_indices = filtered_exercises.sample(min(6, len(filtered_exercises))).index.tolist()
-        else:
-            recommended_indices = filtered_exercises.sample(min(6, len(filtered_exercises))).index.tolist()
-        
-        recommendations = exercises_df.iloc[recommended_indices].copy()
-        recommendations['gifUrl'] = recommendations['id'].apply(format_gif_url)
-        
+
+        arm_exercises = filtered_exercises[filtered_exercises['bodyPart'].str.lower().str.contains("arm")]
+        leg_exercises = filtered_exercises[filtered_exercises['bodyPart'].str.lower().str.contains("leg")]
+
+        def get_weekly_plan(df, n=7):
+            if 'workout_history' in user:
+                try:
+                    history = pd.DataFrame(user['workout_history'])
+                    top_exercises = history['exerciseId'].value_counts().head(3).index.tolist()
+                    similar_exercises = set()
+
+                    for ex_id in top_exercises:
+                        idx = exercises_df[exercises_df['id'] == ex_id].index[0]
+                        sim_scores = list(enumerate(cosine_sim[idx]))
+                        sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)
+                        similar_exercises.update([i[0] for i in sim_scores[1:4]])
+
+                    recommended_indices = list(similar_exercises)
+                    df = exercises_df.iloc[recommended_indices]
+                    df = df[df['bodyPart'].isin(["arms", "legs"])]
+                except:
+                    pass  
+
+            return df.sample(min(n, len(df))).copy()
+
+        weekly_arms = get_weekly_plan(arm_exercises)
+        weekly_legs = get_weekly_plan(leg_exercises)
+
+        weekly_arms['gifUrl'] = weekly_arms['id'].apply(format_gif_url)
+        weekly_legs['gifUrl'] = weekly_legs['id'].apply(format_gif_url)
+
+        arm_workouts = weekly_arms.replace({pd.NA: None}).to_dict('records')
+        leg_workouts = weekly_legs.replace({pd.NA: None}).to_dict('records')
+
+        weekly_plan = {
+            "monday": {"arms": arm_workouts[0] if len(arm_workouts) > 0 else None,
+                       "legs": leg_workouts[0] if len(leg_workouts) > 0 else None},
+            "tuesday": {"arms": arm_workouts[1] if len(arm_workouts) > 1 else None,
+                        "legs": leg_workouts[1] if len(leg_workouts) > 1 else None},
+            "wednesday": {"arms": arm_workouts[2] if len(arm_workouts) > 2 else None,
+                          "legs": leg_workouts[2] if len(leg_workouts) > 2 else None},
+            "thursday": {"arms": arm_workouts[3] if len(arm_workouts) > 3 else None,
+                         "legs": leg_workouts[3] if len(leg_workouts) > 3 else None},
+            "friday": {"arms": arm_workouts[4] if len(arm_workouts) > 4 else None,
+                       "legs": leg_workouts[4] if len(leg_workouts) > 4 else None},
+            "saturday": {"arms": arm_workouts[5] if len(arm_workouts) > 5 else None,
+                         "legs": leg_workouts[5] if len(leg_workouts) > 5 else None},
+            "sunday": {"arms": arm_workouts[6] if len(arm_workouts) > 6 else None,
+                       "legs": leg_workouts[6] if len(leg_workouts) > 6 else None},
+        }
+
         return jsonify({
             "success": True,
             "bmi": bmi,
             "intensity_level": intensity,
-            "recommended_workouts": recommendations.replace({pd.NA: None}).to_dict('records')
+            "weekly_workout_plan": weekly_plan
         }), 200
-        
+
     except Exception as e:
         return jsonify({
             "success": False,
@@ -382,30 +412,27 @@ def calculate_calorie_needs(bmi, weight_kg, activity_level):
     else:
         return base_calories * activity_multiplier  
 
-def generate_meal_plan(bmi, daily_calories):
-    if not food_model or food_df.empty:
-        raise ValueError("Food database not initialized")
-    
-    macros = get_macros_by_bmi(bmi)
-    
-    
-    meals = {
-        'breakfast': generate_meal(daily_calories * 0.25, macros),
-        'lunch': generate_meal(daily_calories * 0.35, macros),
-        'dinner': generate_meal(daily_calories * 0.30, macros),
-        'snacks': [
-            generate_meal(daily_calories * 0.05, macros),
-            generate_meal(daily_calories * 0.05, macros)
-        ]
-    }
-    
-    meals['total_calories'] = sum(
-        meal['total_calories'] 
-        for meal in meals.values() 
-        if isinstance(meal, dict)
-    )
-    
-    return meals
+def generate_weekly_meal_plan(bmi, daily_calories):
+    weekly_plan = {}
+    for day in range(1, 8):  # 7 days
+        daily_plan = {
+            'breakfast': generate_meal(daily_calories * 0.25, get_macros_by_bmi(bmi)),
+            'lunch': generate_meal(daily_calories * 0.35, get_macros_by_bmi(bmi)),
+            'dinner': generate_meal(daily_calories * 0.30, get_macros_by_bmi(bmi)),
+            'snacks': [
+                generate_meal(daily_calories * 0.05, get_macros_by_bmi(bmi)),
+                generate_meal(daily_calories * 0.05, get_macros_by_bmi(bmi))
+            ]
+        }
+        daily_plan['total_calories'] = (
+            daily_plan['breakfast']['total_calories'] +
+            daily_plan['lunch']['total_calories'] +
+            daily_plan['dinner']['total_calories'] +
+            sum(snack['total_calories'] for snack in daily_plan['snacks'])
+        )
+        weekly_plan[f'Day {day}'] = daily_plan
+    return weekly_plan
+
 
 def get_macros_by_bmi(bmi):
     """Determine macronutrient ratios based on BMI"""
@@ -463,13 +490,13 @@ def get_meal_plan():
             profile['bmi']
         )
         
-        meal_plan = generate_meal_plan(
+        meal_plan = generate_weekly_meal_plan(
             bmi=profile['bmi'],
             daily_calories=daily_calories
         )
         
         if not meal_plan:
-            return jsonify({"error": "Failed to generate meal plan"}), 500
+            return jsonify({"error": "Failed to generate weekly meal plan"}), 500
             
         return jsonify(meal_plan)
         
@@ -478,6 +505,7 @@ def get_meal_plan():
             "error": "Internal server error",
             "message": str(e)
         }), 500
+
 
 def adjust_calories_by_goal(base_calories, goal, bmi):
     if goal == "lose_weight" or bmi > 25:
@@ -696,15 +724,18 @@ def update_challenge_progress():
     if not user_progress:
         return jsonify({"error": "You have not joined this challenge"}), 403
 
-    new_progress = user_progress["progress"] + progress
-    is_completed = new_progress >= challenge["target"]
+    current_progress = user_progress["progress"]
+    new_progress = current_progress + progress
+
+    capped_progress = min(new_progress, challenge["target"])
+    is_completed = capped_progress >= challenge["target"]
 
     user_challenges_collection.update_one(
         {"email": user_email, "challenge_name": challenge_name},
-        {"$set": {"progress": new_progress, "completed": is_completed}}
+        {"$set": {"progress": capped_progress, "completed": is_completed}}
     )
 
-    if is_completed:
+    if is_completed and not user_progress.get("completed", False):
         badge_title = f"🏆 {challenge_name} Champion"
         badge_description = f"Congratulations! You completed the '{challenge_name}' challenge and earned the {badge_title} badge!"
 
@@ -722,7 +753,16 @@ def update_challenge_progress():
             "badge": badge_title
         }), 200
 
-    return jsonify({"message": "Progress updated successfully!", "new_progress": new_progress}), 200
+    progress_percent = round((capped_progress / challenge["target"]) * 100, 2)
+
+    return jsonify({
+        "message": "Progress updated successfully!",
+        "new_progress": capped_progress,
+        "target": challenge["target"],
+        "unit": challenge["unit"],
+        "progress_percent": progress_percent
+    }), 200
+
 
 
 @app.route("/api/reset-challenge-progress", methods=["POST"])
