@@ -726,18 +726,15 @@ def update_challenge_progress():
     if not user_progress:
         return jsonify({"error": "You have not joined this challenge"}), 403
 
-    current_progress = user_progress["progress"]
-    new_progress = current_progress + progress
-
-    capped_progress = min(new_progress, challenge["target"])
-    is_completed = capped_progress >= challenge["target"]
+    new_progress = user_progress["progress"] + progress
+    is_completed = new_progress >= challenge["target"]
 
     user_challenges_collection.update_one(
         {"email": user_email, "challenge_name": challenge_name},
-        {"$set": {"progress": capped_progress, "completed": is_completed}}
+        {"$set": {"progress": new_progress, "completed": is_completed}}
     )
 
-    if is_completed and not user_progress.get("completed", False):
+    if is_completed:
         badge_title = f"🏆 {challenge_name} Champion"
         badge_description = f"Congratulations! You completed the '{challenge_name}' challenge and earned the {badge_title} badge!"
 
@@ -755,16 +752,7 @@ def update_challenge_progress():
             "badge": badge_title
         }), 200
 
-    progress_percent = round((capped_progress / challenge["target"]) * 100, 2)
-
-    return jsonify({
-        "message": "Progress updated successfully!",
-        "new_progress": capped_progress,
-        "target": challenge["target"],
-        "unit": challenge["unit"],
-        "progress_percent": progress_percent
-    }), 200
-
+    return jsonify({"message": "Progress updated successfully!", "new_progress": new_progress}), 200
 
 
 @app.route("/api/reset-challenge-progress", methods=["POST"])
